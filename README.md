@@ -190,7 +190,8 @@ On macOS, on 26 November 2026, unless stated.
 - `make engines`: all 9 Spark drills ran on PySpark 4.3.0 with Java 21 and all 5 Airflow drills on Airflow 3.4.0. Their answer keys are those runs. Two of the Airflow answers follow from defaults that changed in Airflow 3 (a cron preset gives a run whose data interval is empty, and catch-up is off).
 - All 18 SQL reference answers parse with PostgreSQL's parser (pglast 8.9).
 - The site was opened in a Chromium browser at desktop width and at 375 px, in light and dark. Exercised by hand: a path page, a failed check, the three hints, a passed check with its debrief, a concept page with an edited example, search, and one mock round to its result page.
-- `make check`: ruff, mypy in strict mode and 297 tests pass. They have not run in GitHub Actions for this version yet.
+- `make check`: ruff, mypy in strict mode and 297 tests pass. The same checks passed in GitHub Actions on Ubuntu 24.04.
+- The live site: all 40 drills and all 35 SQL concept examples were run on https://linusdominic.github.io/de-trap-drills/ in headless Chrome 158. Every reference answer passed, every naive answer failed and every example ran.
 
 The browser against the command line (`make browser-check`):
 
@@ -200,7 +201,6 @@ On 2026-11-26, 40 of 40 drills gave the same result rows, the same case outputs 
 
 ## What was not verified
 
-- **The live site, for this version.** The published site was last checked before the paths and concept pages were added.
 - **Other browsers.** Only Chrome 158 was used. Firefox, Safari and real phones are untested, and nobody has tried typing a query on a phone keyboard.
 - **The CDN.** The site needs jsDelivr for DuckDB-Wasm (a 34 MB file, about 5 MB compressed in transit) and Pyodide (about 6 MB in transit). Offline, or where that host is blocked, the drills do not run in the browser. Load time on a slow connection was not measured.
 - **Engine versions.** The browser runs DuckDB 1.4.3 and the command line runs 2.0.1. They agree on the 52 answers that ship with the drills; a query you write can still behave differently in the two.
