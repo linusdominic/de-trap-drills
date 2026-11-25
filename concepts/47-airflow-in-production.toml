@@ -1,0 +1,66 @@
+title = "Airflow in production: sensors, XCom, pools and mapping"
+area = "Airflow"
+level = "advanced"
+summary = "Airflow should start work, wait for it and record the result. The questions are what it holds while it waits and what it must never carry."
+drills = []
+
+idea = '''
+Airflow is an orchestrator. A healthy deployment uses it to start work elsewhere (a warehouse query, a Spark job, a dbt run), wait, and record what happened. Most production problems come from asking it to do more.
+
+**Waiting.** A sensor waits for something outside Airflow: a file, a partition, another DAG. How it waits matters.
+
+- `mode="poke"`, the default, keeps the task running and holding a worker slot for the whole wait. Enough sensors can use up every slot.
+- `mode="reschedule"` releases the slot between checks.
+- A **deferrable** operator hands the wait to the triggerer, a separate process that watches many waits at once. Prefer it where the operator offers it.
+
+Always set a `timeout`, so that a sensor for something that never arrives fails instead of waiting for ever.
+
+**Passing data.** XCom carries small values between tasks: a file path, a row count, a run id. By default it is stored in the metadata database. Do not pass datasets through it. Write the data to storage and pass the location.
+
+**Limiting concurrency.** There are limits at several levels: a DAG's `max_active_runs` and `max_active_tasks`, and **pools**, which cap how many tasks may use a shared resource at once across all DAGs. Put everything that hits the same database in one pool, and give backfills their own pool so they cannot starve the daily runs.
+
+**Fan-out.** Dynamic task mapping creates one task instance per input at run time:
+
+```python
+@task
+def load(table): ...
+
+load.expand(table=list_tables())
+```
+
+Each mapped instance retries on its own, and how many there are is decided when the upstream task finishes.
+
+**Operating it.**
+
+- Retries with a delay on anything that calls a network.
+- A failure callback that alerts, plus a separate check for runs that are late or never started, because a run that never started fails nothing.
+- DAG files parsed and tested in CI, and one environment before production.
+'''
+
+asked = [
+  "A hundred sensors are waiting for files and nothing else gets scheduled. What is happening?",
+  "How do you pass data between tasks?",
+  "How do you stop a backfill from overloading the warehouse?",
+  "How do you monitor Airflow pipelines?",
+]
+
+answer = [
+  "Airflow orchestrates; the heavy work runs in the warehouse or on a cluster.",
+  "Compare poke, reschedule and deferrable waiting, and always set a timeout.",
+  "XCom is for small metadata; data goes to storage and the task passes its location.",
+  "Use pools and DAG-level limits for concurrency, with a separate pool for backfills.",
+  "Use dynamic task mapping when the fan-out depends on data.",
+  "Alert on failures and, separately, on runs that are late or never started.",
+]
+
+[[probes]]
+q = "Reschedule mode, or a deferrable operator?"
+a = "Both free the worker slot while waiting. Reschedule still starts a task process for every check. A deferrable operator waits inside the triggerer at very little cost per wait, so use it when the operator has that form and a triggerer is running."
+
+[[probes]]
+q = "Why not return a DataFrame from one task to the next?"
+a = "It would be serialised into XCom, which by default is a row in the metadata database. That bloats the database and breaks at some size. Write it to object storage or a table and return the path."
+
+[[probes]]
+q = "A run never started. Which alert catches that?"
+a = "Not a failure callback, because nothing failed. You need a freshness check that lives outside the DAG: the target table's latest partition, or the time since the last successful run, compared with what the schedule promises."

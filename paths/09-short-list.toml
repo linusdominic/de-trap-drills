@@ -1,0 +1,31 @@
+title = "The short list"
+round = "Short on time"
+summary = "Eight drills that cover the traps asked most often, for when the interview is this week."
+outcome = "You have met the common trap families once each and know which path to return to for the ones you missed."
+
+[[stages]]
+title = "How to work a question"
+note = "Read this once. It applies to every drill below."
+steps = ["c:working-the-problem"]
+
+[[stages]]
+title = "Six SQL traps"
+note = "Duplicates, ties, missing days, a NULL, a range boundary and history."
+steps = [
+  "d:sum-after-dedupe",
+  "d:top-n-ties",
+  "d:rolling-7d-missing-days",
+  "d:not-in-null",
+  "d:between-timestamp-end",
+  "d:scd2-as-of-join",
+]
+
+[[stages]]
+title = "Two Python traps"
+note = "A stream you can read once, and a file that is not clean."
+steps = ["d:merge-sorted-streams", "d:csv-quoted-commas"]
+
+[[stages]]
+title = "What to say afterwards"
+note = "Every one of these is followed by the same question."
+steps = ["c:the-scale-answer"]

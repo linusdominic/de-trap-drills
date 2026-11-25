@@ -1,0 +1,66 @@
+title = "Idempotent tasks: use the run's dates, not the clock"
+area = "Airflow"
+level = "core"
+summary = "A task instance belongs to a DAG run with fixed dates. Choose what to process from those dates, so a retry, a clear or a backfill does the same work again."
+drills = ["now-in-task"]
+
+idea = '''
+A task instance is identified by its DAG, its task and its DAG run. The run's dates are fixed when the run is created. The moment at which the task happens to execute is not part of its identity, and it changes: a retry runs minutes later, a cleared task runs days later, a backfill runs months later.
+
+So a task must decide what to process from the run, never from the clock.
+
+```python
+# wrong: a rerun next week processes next week's date
+@task
+def load():
+    day = date.today() - timedelta(days=1)
+    copy_partition(day)
+
+# right: the run decides
+@task
+def load(data_interval_start=None):
+    copy_partition(data_interval_start.date())
+```
+
+In templated fields the same values are available as `{{ ds }}`, `{{ data_interval_start }}` and `{{ data_interval_end }}`. Which of them holds "the day to load" depends on the timetable, so look at one rendered run before you trust it.
+
+Reading the right input is half of it. The write has to be repeatable too.
+
+- **Overwrite the run's partition**, or `MERGE` on a key. A blind `INSERT` doubles the data on the second attempt.
+- **Write somewhere temporary and swap**, so a task that dies halfway leaves nothing half-written.
+- **Make side effects idempotent.** An email or an API call inside a task happens again on a retry unless the receiver deduplicates it.
+
+With that in place, the scheduler's operations are safe:
+
+- **Retry**: the same task instance, tried again after a failure.
+- **Clear**: you reset a finished task instance and it runs again, for the same run and the same dates.
+- **Backfill**: runs created for past dates, executing the same code.
+
+`depends_on_past=True` makes a task wait until its own previous run has succeeded. It is used to protect a task that builds on yesterday's output. It also means one failed run blocks every later one. A task that reads only its own interval does not need it.
+'''
+
+asked = [
+  "A task failed on Monday and was retried on Tuesday morning. How do you make sure it processed Monday's data?",
+  "What is wrong with calling `datetime.now()` inside a task?",
+  "What happens when you clear a task from last week?",
+]
+
+answer = [
+  "A task instance is defined by its DAG, task and run, and the run's dates do not change.",
+  "Derive the input filter and the output partition from the run's dates, never from the wall clock.",
+  "Make the write repeatable: overwrite the run's partition or merge on a key.",
+  "Retry, clear and backfill all execute the same code for the same dates, which is why this matters.",
+  "Explain what `depends_on_past` costs, and that a task reading only its own interval does not need it.",
+]
+
+[[probes]]
+q = "Is it ever right to use the current time in a task?"
+a = "For logging, and for measuring how late a run is, yes. For choosing which data to read or which partition to write, no. If a task really needs \"the latest available\", resolve that once, record it, and pass it downstream so a retry sees the same value."
+
+[[probes]]
+q = "The task can only append to its target. How do you make a rerun safe?"
+a = "Tag every row with the run's interval or run id, delete the rows with that tag before inserting, and do both in one transaction. Or append to a staging table and merge on a key."
+
+[[probes]]
+q = "When would you use depends_on_past?"
+a = "When a run really consumes the previous run's output, such as a running balance. Even then, prefer a design in which each run rebuilds from a stored snapshot, because `depends_on_past` turns one failure into a queue of blocked runs."

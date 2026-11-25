@@ -1,0 +1,53 @@
+title = "The project deep dive"
+area = "The interview"
+level = "core"
+summary = "Tell your own project in four beats: the symptom and its cost, how you measured, the cause and the fix, and the evidence afterwards."
+
+idea = '''
+Most senior loops include a round in which you walk through a project you built. The interviewer picks a thread and pulls on it, to find where your knowledge ends and whether you made the decisions or watched them being made. Prepare two or three projects to this depth.
+
+Tell each story in four beats:
+
+1. **The symptom and its cost.** What was wrong, for whom, and what it cost in time, money or trust. "The nightly load finished after the morning report was due, twice a week" is a symptom. "The pipeline was slow" is not.
+2. **How you measured.** What you looked at to find the cause: a query plan, stage timings, row counts, a reconciliation. Interviewers push hardest on this beat.
+3. **The cause and the fix.** The specific mechanism, and why this fix and not the alternatives you considered.
+4. **The evidence.** The same measurement after the change, and how you made sure the output was still correct.
+
+Use real numbers, and only real ones. Where you have no number, describe the before and the after in words. An invented figure collapses under one follow-up question.
+
+Expect these probes and have an answer to each:
+
+- "How did you know that was the cause?" Give the evidence, not the conclusion.
+- "What else did you try?" Name an option you rejected, and why.
+- "What was your part?" Say "I" for what you did and "we" for the rest.
+- "What would you do differently?" Have a real answer. "Nothing" reads as not having reflected.
+- "What happened afterwards?" Did the fix hold, and how do you know?
+
+Be ready to draw the architecture, to state the scale (rows, size, jobs, people), and to go one level below where you normally stop: how the table is partitioned, how the job retries, which failure you did not handle.
+'''
+
+asked = [
+  "Tell me about a pipeline you made significantly faster.",
+  "Walk me through an incident you handled, from the alert to the fix.",
+  "What was the hardest technical decision on that project, and what did you give up?",
+]
+
+answer = [
+  "Open with the symptom and its concrete cost.",
+  "Show how you measured before you changed anything.",
+  "Explain the mechanism of the cause, and why you chose this fix over the alternatives.",
+  "Give the before-and-after evidence, and how you checked correctness.",
+  "Be exact about your own role and about what you would change.",
+]
+
+[[probes]]
+q = "How did you know it was that and not something else?"
+a = "Point to the evidence that singled it out: the stage that took most of the time, the plan that showed a full scan, the count that stopped matching at one step. If you ruled other causes out, say how."
+
+[[probes]]
+q = "What would you do differently?"
+a = "Pick something real: a check you added too late, a migration you would stage differently, a measurement you wish you had taken first. Then say what you do now because of it."
+
+[[probes]]
+q = "Did the fix hold?"
+a = "Say what you monitored afterwards and for how long, and whether the problem came back as volume grew. If you do not know, say so, and say what you would have set up."

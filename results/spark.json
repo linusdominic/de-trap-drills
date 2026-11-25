@@ -1,0 +1,55 @@
+{
+ "date": "2026-11-26",
+ "engine": "Apache Spark",
+ "version": "4.3.0",
+ "setup": "PySpark 4.3.0, master local[4], default settings unless the code changes one",
+ "python": "3.12.16",
+ "java": "openjdk version \"21.0.13.0.2\" 2026-10-22",
+ "facts": {
+  "lazy-recompute": {
+   "value": "2000",
+   "output": "kept = 500, total = 999000\nparse was called 2000 times for 1,000 records\nwith .cache() before the two actions: 1000 times",
+   "hash": "bf79f05a8527"
+  },
+  "coalesce-cannot-increase": {
+   "value": "8",
+   "output": "events has 8 partitions\nevents.coalesce(100) has 8 partitions\nevents.repartition(100) has 100 partitions",
+   "hash": "872e77e92aec"
+  },
+  "coalesce-pulls-upstream": {
+   "value": "1",
+   "output": "coalesce(1):    stages and their task counts: [1]\nrepartition(1): stages and their task counts: [8, 1]",
+   "hash": "5f87f240de3f"
+  },
+  "shuffle-partitions-aqe": {
+   "value": "1",
+   "output": "spark.sql.shuffle.partitions = 200\nspark.sql.adaptive.enabled   = true\nper_key has 1 partition(s)\nwith adaptive query execution off: 200 partitions",
+   "hash": "fdf1c856a359"
+  },
+  "window-single-partition": {
+   "value": "1",
+   "output": "+- Window [row_number() windowspecdefinition(ts ASC NULLS FIRST, specifiedwindowframe(RowFrame, unboundedpreceding$(), currentrow$())) AS n], [ts ASC NULLS FIRST]\n      +- Exchange SinglePartition, ENSURE_REQUIREMENTS\nnumbered has 1 partition(s)",
+   "hash": "a37b790a2ede"
+  },
+  "broadcast-join-no-shuffle": {
+   "value": "0",
+   "output": "threshold = 10485760b\n   +- BroadcastHashJoin [city_id], [city_id], Inner, BuildRight, false, false\n      +- BroadcastExchange HashedRelationBroadcastMode(List(input[0, bigint, false]),false)\n\nwith the threshold set to -1 (broadcast off):\n   +- SortMergeJoin [city_id], [city_id], Inner\n      :  +- Exchange hashpartitioning(city_id, 200), ENSURE_REQUIREMENTS\n         +- Exchange hashpartitioning(city_id, 200), ENSURE_REQUIREMENTS",
+   "hash": "f2735d11f7eb"
+  },
+  "udf-blocks-pushdown": {
+   "value": "none",
+   "output": "rows: built-in 10000, UDF 10000\nbuilt-in expression  PushedFilters: [IsNotNull(country), EqualTo(country,PK)]\nPython UDF           PushedFilters: []\nthe UDF plan also contains: ArrowEvalPython",
+   "hash": "1f449f31de9f"
+  },
+  "union-by-position": {
+   "value": "107",
+   "output": "january.union(february):\n+--------+------+--------+\n|order_id|amount|discount|\n+--------+------+--------+\n|       1|   100|       5|\n|       2|     7|     300|\n+--------+------+--------+\n\nsum(amount) with union       = 107\nsum(amount) with unionByName = 400",
+   "hash": "62c5a6ca7902"
+  },
+  "hot-key-partition": {
+   "value": "most",
+   "output": "rows per partition: [12735, 12185, 12404, 12667, 12480, 912622, 12455, 12452]\nlargest partition: 91% of the rows",
+   "hash": "6a502b47a1c0"
+  }
+ }
+}

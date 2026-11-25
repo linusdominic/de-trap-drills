@@ -1,0 +1,90 @@
+title = "Incremental processing"
+area = "Performance at scale"
+level = "advanced"
+summary = "Process only the data that arrived since the last run and merge it into the result, instead of recomputing all of history every time."
+drills = ["dedupe-latest"]
+experiment = "dedupe"
+
+idea = '''
+A job that recomputes its whole output on every run gets slower every day, because history only grows. An incremental job reads the new slice of input and applies it to the existing output. Its cost follows the daily volume, not the size of the table.
+
+The standard shape for a current-state table:
+
+1. Read only the new partition of the change feed.
+2. Deduplicate inside it, keeping the latest version of each key.
+3. `MERGE` that into the current-state table on the key: update when the incoming version is newer, insert when the key is new.
+
+```sql
+MERGE INTO orders_current AS t
+USING new_versions AS s ON t.order_id = s.order_id
+WHEN MATCHED AND s.updated_at > t.updated_at THEN
+  UPDATE SET amount = s.amount, updated_at = s.updated_at
+WHEN NOT MATCHED THEN
+  INSERT (order_id, amount, updated_at) VALUES (s.order_id, s.amount, s.updated_at);
+```
+
+The hard part is deciding what "new" means. A high-water mark such as `WHERE updated_at > last_max` is the common answer, and it has known failure modes:
+
+- **Late rows.** A row committed after your run, with an earlier timestamp, sits below the mark and is never read. Read with an overlap window, or select by ingestion time or log position instead of business time.
+- **Clock skew.** Timestamps written by several servers are not strictly ordered.
+- **Equal timestamps.** With `>` you skip rows that share the mark. With `>=` you read them again, which is only safe if the merge is idempotent.
+- **Hard deletes.** A deleted row sends no new version unless the source emits one.
+
+Because of these, keep a full refresh as a tested fallback and reconcile the incremental table against it from time to time. In the measurement below, the query over the newest day alone answers a narrower question than the two over all history. That is the trade you are making.
+'''
+
+asked = [
+  "This table is rebuilt from scratch every night and the job no longer finishes in time. What do you do?",
+  "How do you load only the rows that changed since the last run?",
+  "What can go wrong with a high-water mark on `updated_at`?",
+]
+
+answer = [
+  "Read only the new slice, dedupe inside it, and merge into the existing table on the key.",
+  "Say how the new slice is selected, and prefer ingestion time or log position to business time.",
+  "List the failure modes of a high-water mark: late rows, clock skew, equal timestamps, deletes.",
+  "Make the merge idempotent, so that an overlap window or a retry cannot double anything.",
+  "Keep a full refresh as the fallback and reconcile against it on a schedule.",
+]
+
+[[probes]]
+q = "How wide should the overlap window be?"
+a = "Wider than the longest delay you have observed between a row's timestamp and its arrival, with a margin. Measure that lag from the data instead of guessing, and let a periodic full reconciliation catch whatever is later still."
+
+[[probes]]
+q = "When is a full refresh the better choice?"
+a = "When the table is small, when the logic changed and history must be restated, or when the incremental logic is so complex that its errors cost more than the compute. Many teams run incrementally every day and fully once in a while."
+
+[[probes]]
+q = "Is the window function or the grouped aggregate faster for the dedupe step?"
+a = "It depends on the engine. Some optimizers turn a row-number filter into the same aggregate, so the two cost the same, and others sort. Read the plan for the engine in question before claiming either."
+
+[[examples]]
+title = "Applying a new batch to the current state"
+setup = '''
+CREATE TABLE orders_current (order_id INTEGER, amount INTEGER, updated_at TIMESTAMP);
+INSERT INTO orders_current VALUES
+  (1, 100, '2026-03-02 09:00:00'),
+  (2, 40, '2026-03-01 12:00:00'),
+  (3, 70, '2026-03-02 15:00:00');
+CREATE TABLE new_versions (order_id INTEGER, amount INTEGER, updated_at TIMESTAMP);
+INSERT INTO new_versions VALUES
+  (1, 90, '2026-03-01 08:00:00'),
+  (2, 55, '2026-03-03 10:00:00'),
+  (4, 25, '2026-03-03 11:00:00');
+'''
+code = '''
+WITH candidates AS (
+  SELECT order_id, amount, updated_at, 'kept' AS came_from FROM orders_current
+  UNION ALL
+  SELECT order_id, amount, updated_at, 'batch' FROM new_versions
+), ranked AS (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) AS rn
+  FROM candidates
+)
+SELECT order_id, amount, updated_at, came_from
+FROM ranked
+WHERE rn = 1
+ORDER BY order_id
+'''
+note = "Order 2 is updated and order 4 is inserted. The batch also carries a late, older version of order 1, and it does not replace the newer row: the merge compares versions, not arrival order."

@@ -7,7 +7,8 @@
  "pyodide": "314.0.8",
  "python_in_browser": "3.14.2",
  "python_here": "3.12.16",
- "drills_checked": 26,
+ "drills_checked": 40,
+ "examples_checked": 35,
  "problems": 0,
  "drills": [
   {
@@ -217,6 +218,260 @@
    "naive_same": true,
    "reference_passes_in_browser": true,
    "naive_fails_in_browser": true
+  },
+  {
+   "id": "lazy-recompute",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "coalesce-cannot-increase",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "coalesce-pulls-upstream",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "shuffle-partitions-aqe",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "window-single-partition",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "broadcast-join-no-shuffle",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "udf-blocks-pushdown",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "union-by-position",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "hot-key-partition",
+   "track": "spark",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "daily-run-window",
+   "track": "airflow",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "catchup-default",
+   "track": "airflow",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "now-in-task",
+   "track": "airflow",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "top-level-code",
+   "track": "airflow",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "branch-then-join",
+   "track": "airflow",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  }
+ ],
+ "examples": [
+  {
+   "id": "grain-and-fanout:1",
+   "same": true
+  },
+  {
+   "id": "grain-and-fanout:2",
+   "same": true
+  },
+  {
+   "id": "deduplication:1",
+   "same": true
+  },
+  {
+   "id": "deduplication:2",
+   "same": true
+  },
+  {
+   "id": "window-functions:1",
+   "same": true
+  },
+  {
+   "id": "window-functions:2",
+   "same": true
+  },
+  {
+   "id": "gaps-and-islands:1",
+   "same": true
+  },
+  {
+   "id": "gaps-and-islands:2",
+   "same": true
+  },
+  {
+   "id": "missing-rows:1",
+   "same": true
+  },
+  {
+   "id": "missing-rows:2",
+   "same": true
+  },
+  {
+   "id": "outer-joins-and-filters:1",
+   "same": true
+  },
+  {
+   "id": "outer-joins-and-filters:2",
+   "same": true
+  },
+  {
+   "id": "null-logic:1",
+   "same": true
+  },
+  {
+   "id": "null-logic:2",
+   "same": true
+  },
+  {
+   "id": "additive-measures:1",
+   "same": true
+  },
+  {
+   "id": "additive-measures:2",
+   "same": true
+  },
+  {
+   "id": "half-open-intervals:1",
+   "same": true
+  },
+  {
+   "id": "half-open-intervals:2",
+   "same": true
+  },
+  {
+   "id": "time-zones:1",
+   "same": true
+  },
+  {
+   "id": "slowly-changing-dimensions:1",
+   "same": true
+  },
+  {
+   "id": "slowly-changing-dimensions:2",
+   "same": true
+  },
+  {
+   "id": "point-in-time-joins:1",
+   "same": true
+  },
+  {
+   "id": "point-in-time-joins:2",
+   "same": true
+  },
+  {
+   "id": "event-time-and-late-data:1",
+   "same": true
+  },
+  {
+   "id": "partition-pruning:1",
+   "same": true
+  },
+  {
+   "id": "incremental-processing:1",
+   "same": true
+  },
+  {
+   "id": "pre-aggregation:1",
+   "same": true
+  },
+  {
+   "id": "sort-order-and-data-skipping:1",
+   "same": true
+  },
+  {
+   "id": "joins-and-skew:1",
+   "same": true
+  },
+  {
+   "id": "idempotency-and-backfills:1",
+   "same": true
+  },
+  {
+   "id": "change-data-capture:1",
+   "same": true
+  },
+  {
+   "id": "data-quality-and-reconciliation:1",
+   "same": true
+  },
+  {
+   "id": "fact-tables:1",
+   "same": true
+  },
+  {
+   "id": "dimension-design:1",
+   "same": true
+  },
+  {
+   "id": "working-the-problem:1",
+   "same": true
   }
  ]
 }

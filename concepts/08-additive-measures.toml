@@ -1,0 +1,89 @@
+title = "Additive, semi-additive and non-additive measures"
+area = "SQL correctness"
+level = "advanced"
+summary = "Sums can be summed again. Balances cannot be summed over time, and ratios, averages and distinct counts cannot be re-aggregated at all."
+drills = ["avg-of-averages"]
+
+idea = '''
+Summary tables exist so that nobody scans the raw data twice. Whether a number in a summary table can be rolled up further depends on what kind of measure it is.
+
+- **Additive.** Revenue, quantity, a count of orders. Sum it across any dimension and the result is still right.
+- **Semi-additive.** A balance, a stock level, a headcount. It is a state at a moment. You can sum it across accounts or warehouses on one day, but not across days: adding Monday's balance to Tuesday's counts the same money twice. Across time, take the last value of the period, or an average.
+- **Non-additive.** A ratio, an average, a percentage, a percentile, a distinct count. It cannot be re-aggregated from its own values in any direction.
+
+For a ratio or an average, the fix is to store the parts. Keep the numerator and the denominator as two additive columns, sum each, and divide once at the end:
+
+```sql
+SUM(revenue) / SUM(orders) AS avg_order_value
+```
+
+An average of daily averages gives every day the same weight, whatever its volume.
+
+A distinct count has no such parts. Three users on Monday and two on Tuesday may be five people, three, or anything between. To get the weekly figure you need the ids themselves, or a mergeable sketch such as HyperLogLog, which several warehouses and Spark provide for approximate distinct counts. Percentiles have the same problem and the same two answers: the raw values, or a sketch built for quantiles.
+
+A quick test for any summary column: does the total of the parts equal the figure for the whole? If you cannot be sure, the column is not additive, and the summary table should carry its components instead.
+'''
+
+asked = [
+  "You only have a daily summary table. Give me the monthly conversion rate.",
+  "Can we add up daily active users to get monthly active users?",
+  "What is the total account balance for the quarter?",
+  "Which columns would you put in an aggregate table for this dashboard?",
+]
+
+answer = [
+  "Classify the measure before aggregating it: additive, semi-additive or non-additive.",
+  "Rebuild ratios and averages from summed numerators and denominators, dividing last.",
+  "For balances and stock levels, sum across entities but take the period-end value or an average across time.",
+  "Say that distinct counts and percentiles need the raw values or a mergeable sketch.",
+  "Design summary tables to store additive components, not finished ratios.",
+]
+
+[[probes]]
+q = "The average of averages matched the true average in testing. Why?"
+a = "The test groups had equal sizes, so equal weights happened to be the right weights. It only goes wrong when volumes differ, which is why it survives review and fails in production."
+
+[[probes]]
+q = "The dashboard needs weekly unique users and you can only keep daily aggregates. What do you store?"
+a = "A sketch per day, such as HyperLogLog, if the engine has one: sketches merge, so seven daily sketches give the weekly estimate with a known error. If the number must be exact, keep one row per user and day and count distinct from that."
+
+[[probes]]
+q = "How do you report inventory for a month?"
+a = "Say which figure is wanted: the closing level on the last day, or the average daily level. Both are valid. The sum of the daily levels is not a quantity of anything."
+
+[[examples]]
+title = "Daily unique visitors do not add up to weekly unique visitors"
+setup = '''
+CREATE TABLE visits (day DATE, user_id VARCHAR);
+INSERT INTO visits VALUES
+  ('2026-03-02', 'a'), ('2026-03-02', 'b'), ('2026-03-02', 'c'),
+  ('2026-03-03', 'a'), ('2026-03-03', 'b'),
+  ('2026-03-04', 'a'), ('2026-03-04', 'd');
+'''
+code = '''
+SELECT (SELECT SUM(daily_users)
+        FROM (SELECT day, COUNT(DISTINCT user_id) AS daily_users FROM visits GROUP BY day) AS d
+       ) AS sum_of_daily_uniques,
+       COUNT(DISTINCT user_id) AS unique_users_in_period
+FROM visits
+'''
+note = "The daily figures 3, 2 and 2 sum to 7, but only four people visited. User a was counted on all three days."
+
+[[examples]]
+title = "A balance sums across accounts, not across days"
+setup = '''
+CREATE TABLE balances (account VARCHAR, day DATE, balance INTEGER);
+INSERT INTO balances VALUES
+  ('A', '2026-03-01', 100), ('A', '2026-03-02', 120), ('A', '2026-03-03', 90),
+  ('B', '2026-03-01', 50),  ('B', '2026-03-02', 50),  ('B', '2026-03-03', 70);
+'''
+code = '''
+SELECT CAST(day AS VARCHAR) AS scope, SUM(balance) AS total
+FROM balances
+GROUP BY day
+UNION ALL
+SELECT 'all days summed', SUM(balance)
+FROM balances
+ORDER BY scope
+'''
+note = "Each daily total is a real amount of money held that day. The last row, 480, is not an amount of anything: the same money was counted three times. The closing balance is the 160 of 3 March."

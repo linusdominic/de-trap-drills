@@ -1,0 +1,59 @@
+title = "Partitions: repartition, coalesce and shuffle partitions"
+area = "Spark"
+level = "core"
+summary = "A partition is one task's share of the data. How many there are, and how rows are spread over them, decides parallelism, memory per task and output files."
+drills = ["coalesce-cannot-increase", "coalesce-pulls-upstream", "shuffle-partitions-aqe", "window-single-partition"]
+
+idea = '''
+A DataFrame is split into partitions, and each stage runs one task per partition. The count comes from three places:
+
+- **At the source.** Files are split into chunks of up to `spark.sql.files.maxPartitionBytes`, 128 MB by default.
+- **After a shuffle.** A `groupBy`, a join or a `distinct` writes its output into `spark.sql.shuffle.partitions` partitions, 200 by default. With adaptive query execution (AQE), on by default since Spark 3.2, Spark looks at the real sizes after the shuffle and merges small partitions, so a small result ends up in far fewer.
+- **When you ask**, with `repartition(n)` or `coalesce(n)`.
+
+Those two are not the same operation.
+
+- `repartition(n)` does a full shuffle. It can raise or lower the count, spreads rows evenly, and can partition by a column.
+- `coalesce(n)` merges existing partitions without a shuffle. It can only lower the count: asking for more than you have changes nothing. And with no shuffle there is no stage boundary, so the work upstream of the coalesce runs in the merged tasks too.
+
+```python
+# the filter also runs in one task
+df.filter(cond).coalesce(1).write.parquet(out)
+# the filter runs in parallel, then one shuffle collects the result
+df.filter(cond).repartition(1).write.parquet(out)
+```
+
+Some operations fix the layout for you. A window with `ORDER BY` and no `PARTITION BY`, such as a global `row_number()`, moves every row into a single partition. Spark logs a warning, and one task then holds the whole dataset.
+
+Partitions become files. Each task writes at least one file per output directory, so 200 partitions written with `partitionBy("day")` over 30 days can produce thousands of small files. Repartition by the output column before the write.
+
+Aim for partitions that are neither tiny nor huge. Too many means scheduling overhead and small files. Too few means large tasks that spill to disk or run out of memory.
+'''
+
+asked = [
+  "What is the difference between `repartition` and `coalesce`?",
+  "The job writes thousands of tiny files. Why, and how do you fix it?",
+  "What does `spark.sql.shuffle.partitions` control, and does its default still matter with AQE on?",
+  "Why is `coalesce(1)` before a write risky on a large dataset?",
+]
+
+answer = [
+  "Each stage runs one task per partition, so the partition count is the parallelism.",
+  "Name where the count comes from: the input split size, the shuffle setting, and explicit calls.",
+  "`repartition` shuffles and can go up or down; `coalesce` does not shuffle and can only go down.",
+  "`coalesce` pulls the upstream work into the merged tasks, because there is no stage boundary.",
+  "AQE merges small shuffle partitions at run time, so the configured number is a starting point.",
+  "Partitions become output files, so repartition by the output column before a partitioned write.",
+]
+
+[[probes]]
+q = "You need a single output file. coalesce(1) or repartition(1)?"
+a = "`repartition(1)` when the upstream work is heavy: the shuffle keeps that work parallel and only the final write is single. `coalesce(1)` saves the shuffle but runs everything since the last shuffle in one task. On a small result either is fine."
+
+[[probes]]
+q = "With AQE on, should you still set spark.sql.shuffle.partitions?"
+a = "AQE merges partitions that are too small, but outside skewed joins it does not generally split ones that are too large. So set the number high enough for your largest shuffle and let AQE coalesce downward. Check the behaviour on your Spark version."
+
+[[probes]]
+q = "How do you see how rows are spread across partitions?"
+a = "Group by `spark_partition_id()` and count, or look at the per-task input and shuffle sizes of the stage in the Spark UI. One partition far larger than the rest is skew."

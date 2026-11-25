@@ -1,0 +1,65 @@
+title = "Working a problem in the room"
+area = "The interview"
+level = "core"
+summary = "A fixed routine for a live SQL or Python question: ask about the input, say the grain, name the edge cases, test on the awkward row, then offer scale."
+drills = ["top-n-ties", "not-in-null"]
+
+idea = '''
+In a live SQL or Python round, the query is half of what is scored. The other half is whether you noticed the trap before it caught you. A fixed routine makes that likely.
+
+1. **Ask about the input.** How large is it? Can a key repeat? Can the columns in the question be NULL? Are timestamps in UTC? Is one row one order, or one order line? Two or three questions, not ten.
+2. **Say the grain and the output.** "One row per customer, with their total, including customers with no orders." A misunderstanding surfaces here, before any code.
+3. **Name the edge cases aloud.** Run the same list every time: duplicates (can a key repeat?), ties (two rows share the top value), NULLs (in a join key, a filter or an aggregate), missing rows (a day or a group with no data), and time (boundaries, time zones, the end of a range).
+4. **Write it in steps.** CTEs or small functions with names, one idea each. It is easier to explain and easier to fix.
+5. **Test against the sample rows.** Pick the awkward row, not the easy one, and trace it through. Interviewers plant that row on purpose.
+6. **State the cost.** For Python, time and memory, and what stays in memory when the input is a 100 GB file. For SQL, what is scanned and what is joined.
+7. **Offer the scale answer** before you are asked: what you would change at a billion rows, and how you would confirm it.
+
+When the question is ambiguous, ask which behaviour is wanted. "Top three" with a tie at third place has three defensible answers, and choosing one silently is the mistake. Say which SQL dialect you are writing if it matters.
+
+When you are stuck, say what you are checking and keep going. Silence gives the interviewer nothing to score.
+'''
+
+asked = [
+  "Here is a schema and a question. Talk me through your approach as you write the query.",
+  "What would you ask before you start?",
+  "Your query returns the right answer on this sample. Are you done?",
+]
+
+answer = [
+  "Ask a few targeted questions about size, duplicates, NULLs and time before writing.",
+  "Restate the output and its grain in one sentence.",
+  "Run the edge-case list aloud: duplicates, ties, NULLs, missing rows, time.",
+  "Trace the awkward sample row through the query.",
+  "Give the complexity and offer the scale answer unprompted.",
+]
+
+[[probes]]
+q = "The interviewer says the data is clean. Do you still ask?"
+a = "Ask once, briefly, then take the answer and state it as an assumption in your solution. If a later follow-up breaks the assumption, you have already shown where the query would need to change."
+
+[[probes]]
+q = "Halfway through, you realise your approach is wrong. What do you do?"
+a = "Say so, say why, and switch. Naming the flaw yourself scores better than defending the query until the interviewer finds it."
+
+[[probes]]
+q = "How do you test without running the query?"
+a = "Trace two or three rows by hand through each step: one normal row and the awkward ones in the sample, such as a tie, a NULL or a repeated key. Write down the intermediate result for those rows."
+
+[[examples]]
+title = "\"Top three\" with ties has three answers"
+setup = '''
+CREATE TABLE scores (player VARCHAR, points INTEGER);
+INSERT INTO scores VALUES ('Asha', 90), ('Bilal', 90), ('Chen', 80), ('Dana', 80), ('Emre', 70);
+'''
+code = '''
+SELECT
+  player,
+  points,
+  ROW_NUMBER() OVER (ORDER BY points DESC, player) AS with_row_number,
+  RANK() OVER (ORDER BY points DESC) AS with_rank,
+  DENSE_RANK() OVER (ORDER BY points DESC) AS with_dense_rank
+FROM scores
+ORDER BY points DESC, player
+'''
+note = "Keep `with_row_number <= 3` and Dana is dropped despite tying with Chen. Keep `with_rank <= 3` and four players stay. Keep `with_dense_rank <= 3` and all five do, because that keeps the top three scores. Ask which one is wanted."

@@ -1,0 +1,53 @@
+title = "Reading a query plan"
+area = "Performance at scale"
+level = "advanced"
+summary = "A plan shows how much data each step reads and how rows are joined and moved, which turns a performance guess into evidence."
+
+idea = '''
+A query plan is the engine's answer to "how will you run this". Reading one is how you turn a guess about performance into evidence. Every engine prints plans differently, but you look for the same five things.
+
+1. **Scans.** Which tables are read and how much of each: partitions, files or rows. A filter shown inside the scan was pushed down. A separate filter step above the scan means every row was read first.
+2. **Filters and projections.** Whether only the needed columns are read, and where each predicate is applied.
+3. **Joins.** The strategy (hash, sort-merge, broadcast, nested loop) and the order. A nested loop over two large inputs usually means a missing or non-equality join condition.
+4. **Exchanges.** On a distributed engine, each shuffle or exchange step moves rows across the network. Count them.
+5. **Estimates against actuals.** `EXPLAIN` shows what the planner expects. `EXPLAIN ANALYZE`, or the query profile in a warehouse UI, shows what happened. A large gap between estimated and actual rows points to stale statistics and explains a bad join choice.
+
+A plan is a tree that runs from the leaves upward. The plan below is illustrative and simplified, not the output of a real engine. Read it from the bottom.
+
+```text
+AGGREGATE         sum(amount)
+  HASH JOIN       o.customer_id = c.customer_id
+    SCAN orders       filter: order_date >= '2026-03-01'    files read: 31 of 1200
+    SCAN customers    rows: 50,000
+```
+
+The scan of `orders` carries the date filter and reads a small share of the files, so pruning worked. If the filter appeared as its own step above the scan, with every file read, that would be the first thing to fix.
+
+Change one thing at a time, and compare the same numbers before and after.
+'''
+
+asked = [
+  "How do you read an EXPLAIN plan? What do you look at first?",
+  "This query got slow after the table grew. How do you find out why?",
+  "What is the difference between EXPLAIN and EXPLAIN ANALYZE?",
+]
+
+answer = [
+  "Start at the scans: how much data is read, and whether the filters were pushed down.",
+  "Check the join strategy and order, and look for an accidental nested loop or cross join.",
+  "On a cluster, count the shuffles and look at the size of each.",
+  "Compare estimated and actual row counts to spot stale statistics.",
+  "Change one thing, rerun, and compare the same metrics.",
+]
+
+[[probes]]
+q = "The plan looks fine and the query is still slow. What next?"
+a = "Look at runtime evidence, not the plan alone: time and rows per operator from `EXPLAIN ANALYZE` or the query profile, spilling to disk, skewed tasks, queueing and concurrency. A good plan can still wait for resources."
+
+[[probes]]
+q = "The planner estimates 100 rows and the operator produces 10 million. What does that tell you?"
+a = "The statistics are stale or missing, or the predicates are correlated in a way the planner cannot model. Refresh the statistics first. A wrong estimate is how a planner ends up choosing a nested loop or broadcasting a table that is too large."
+
+[[probes]]
+q = "Where do you find this in Spark?"
+a = "`df.explain()` prints the physical plan, in which `Exchange` marks a shuffle and the join node names the strategy. The SQL tab of the Spark UI shows the executed plan with row counts and time per stage."

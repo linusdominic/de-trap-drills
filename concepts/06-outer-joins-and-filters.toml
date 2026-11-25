@@ -1,0 +1,103 @@
+title = "Outer joins, filters and the denominator"
+area = "SQL correctness"
+level = "core"
+summary = "A condition on the right-hand table in WHERE turns a LEFT JOIN into an inner join and removes the rows the rate is divided by."
+drills = ["cohort-retention-where-filter", "funnel-event-order"]
+
+idea = '''
+A `LEFT JOIN` keeps every row of the left table. Where the right table has no match, its columns are NULL. That NULL-filled row is the whole point: it is how "this store had no failed inspection" stays in the result.
+
+`WHERE` runs after the join. A condition on a right-hand column, such as `WHERE i.result = 'fail'`, is not true for a NULL, so the unmatched rows are removed and the query behaves like an inner join. Nothing fails. The stores with zero failures are simply gone, and any rate computed from the result has lost its denominator.
+
+There are two rules for where a condition goes:
+
+- A condition that says **which right-hand rows count as a match** belongs in `ON`.
+- A condition that says **which left-hand rows are in the report** belongs in `WHERE`.
+
+The other way is to keep the join open and put the condition inside the aggregate:
+
+```sql
+COUNT(DISTINCT CASE WHEN i.result = 'fail' THEN i.inspection_id END)
+```
+
+`COUNT(...) FILTER (WHERE ...)` is the standard spelling of the same thing. PostgreSQL and DuckDB support it; where it is missing, use `CASE`.
+
+After a left join, count a right-hand column, not `*`. `COUNT(*)` counts the NULL-filled row as one, so a store with no inspections shows 1.
+
+A funnel or a retention rate is this pattern with time in it. The left side is everyone who entered: the cohort, or the users who did step one. Each later step is a left join that must also be later in time for the same user, with that condition in `ON`. The left side fixes the denominator. Counting each event type separately, with no join, loses both the ordering and the link to who entered.
+'''
+
+asked = [
+  "For every customer, the number of orders in the last 30 days, including customers with none.",
+  "Day-7 retention by signup cohort.",
+  "What is the difference between a condition in ON and the same condition in WHERE?",
+]
+
+answer = [
+  "Say what the left table is and that its row count fixes the denominator.",
+  "Put conditions on the right-hand table in `ON`, or inside the aggregate with `CASE` or `FILTER`.",
+  "Count a right-hand column, or distinct right-hand keys, never `COUNT(*)`, after a left join.",
+  "For funnels, anchor on the first step and require each later step to come later for the same user.",
+  "Check the result: the number of rows or the total of the denominator must equal the left table's.",
+]
+
+[[probes]]
+q = "For an inner join, does it matter whether the condition is in ON or WHERE?"
+a = "Not for the result: an inner join keeps only matched rows either way, and the optimizer treats the two the same. It matters only for outer joins, where `ON` decides what matches and `WHERE` removes rows afterwards."
+
+[[probes]]
+q = "Every cohort shows 100% retention. What do you check?"
+a = "Whether a filter on the returning-order table sits in `WHERE`. If it does, users who never came back were removed and the denominator became the users who returned."
+
+[[probes]]
+q = "How do you find rows on the left with no match at all?"
+a = "A left join with `WHERE right.key IS NULL`, or `NOT EXISTS`. That is the one case where a right-hand condition in `WHERE` is intended: it keeps only the unmatched rows."
+
+[[examples]]
+title = "The same filter in WHERE and in ON"
+setup = '''
+CREATE TABLE stores (store_id INTEGER, city VARCHAR);
+INSERT INTO stores VALUES (1, 'Leeds'), (2, 'Leeds'), (3, 'York'), (4, 'York');
+CREATE TABLE inspections (inspection_id INTEGER, store_id INTEGER, result VARCHAR);
+INSERT INTO inspections VALUES (1, 1, 'fail'), (2, 1, 'pass'), (3, 2, 'pass'), (4, 3, 'fail'), (5, 3, 'fail');
+'''
+code = '''
+SELECT 'filter in WHERE' AS query, COUNT(*) AS stores_returned
+FROM (
+  SELECT s.store_id
+  FROM stores AS s
+  LEFT JOIN inspections AS i ON i.store_id = s.store_id
+  WHERE i.result = 'fail'
+  GROUP BY s.store_id
+) AS a
+UNION ALL
+SELECT 'filter in ON', COUNT(*)
+FROM (
+  SELECT s.store_id
+  FROM stores AS s
+  LEFT JOIN inspections AS i ON i.store_id = s.store_id AND i.result = 'fail'
+  GROUP BY s.store_id
+) AS b
+ORDER BY stores_returned
+'''
+note = "With the filter in WHERE only the two stores that failed remain. With it in ON all four stores are still there, two of them with nothing matched."
+
+[[examples]]
+title = "Keep the join open and count conditionally"
+setup = '''
+CREATE TABLE stores (store_id INTEGER, city VARCHAR);
+INSERT INTO stores VALUES (1, 'Leeds'), (2, 'Leeds'), (3, 'York'), (4, 'York');
+CREATE TABLE inspections (inspection_id INTEGER, store_id INTEGER, result VARCHAR);
+INSERT INTO inspections VALUES (1, 1, 'fail'), (2, 1, 'pass'), (3, 2, 'pass'), (4, 3, 'fail'), (5, 3, 'fail');
+'''
+code = '''
+SELECT s.store_id,
+       COUNT(*) AS count_star,
+       COUNT(i.inspection_id) AS inspections,
+       COUNT(CASE WHEN i.result = 'fail' THEN i.inspection_id END) AS failed
+FROM stores AS s
+LEFT JOIN inspections AS i ON i.store_id = s.store_id
+GROUP BY s.store_id
+ORDER BY s.store_id
+'''
+note = "Store 4 was never inspected: `inspections` is 0, and `COUNT(*)` says 1 because it counts the NULL-filled row."

@@ -1,0 +1,71 @@
+title = "Pre-aggregation and summary tables"
+area = "Performance at scale"
+level = "advanced"
+summary = "Answer a repeated question from a small table computed once, and know which measures can be rolled up again and which cannot."
+drills = ["rolling-7d-missing-days", "avg-of-averages"]
+experiment = "precompute"
+
+idea = '''
+A dashboard that shows revenue per day and city does not need every event each time it loads. Compute the daily totals once, store them in a summary table, and the dashboard reads a small table instead of the raw history. The measurement below shows the difference on one machine.
+
+There are three forms, from most to least manual:
+
+- **A summary table** that your pipeline builds and refreshes, usually one partition per day.
+- **A materialized view** that the warehouse maintains. Whether it refreshes incrementally, and which queries qualify, differs by engine, so check before you promise it.
+- **An incremental model** in a tool such as dbt, which is a managed version of the first.
+
+What you can store depends on the measure:
+
+- **Additive measures** (counts, sums) roll up to any coarser level. Daily revenue sums to monthly revenue.
+- **Ratios and averages** do not. Store the numerator and the denominator and divide at query time.
+- **Distinct counts and medians** do not either. Daily unique users do not add up to monthly unique users, because one user appears on many days. Compute them from a finer table, or store a mergeable sketch (HyperLogLog for distinct counts, a quantile sketch for percentiles) and accept an approximate answer.
+
+A summary table is a second copy of the truth, and that has a cost. It must be refreshed. A late-arriving row must reopen a partition that was already summarised. And it must reconcile with the raw table. Choose its grain from the questions it serves: as coarse as possible, and as fine as the finest filter the dashboard offers.
+'''
+
+asked = [
+  "This dashboard query runs every five minutes and scans the fact table each time. What would you do?",
+  "We keep daily unique users in a summary table. Can we get monthly unique users from it?",
+  "When would you use a materialized view instead of a table your pipeline writes?",
+]
+
+answer = [
+  "Precompute at the coarsest grain that still answers every filter on the dashboard.",
+  "Store additive measures, and the numerator and denominator of every ratio.",
+  "Say what cannot be re-aggregated (distinct counts, medians) and offer sketches as the approximate route.",
+  "Cover the refresh: incremental by partition, and how late data reopens a partition.",
+  "Reconcile the summary against the raw table with a scheduled check.",
+]
+
+[[probes]]
+q = "A late event arrives for a day that is already summarised. What happens?"
+a = "The job must recompute that day's partition of the summary, not append to it. Track which source partitions changed and rebuild the matching summary partitions, which is safe when the rebuild overwrites."
+
+[[probes]]
+q = "How accurate is HyperLogLog?"
+a = "It is approximate, and the error depends on the size of the sketch. Typical configurations are within a few percent. That is fine for a trend on a dashboard and wrong for billing, and the engine's documentation states the error of its own function."
+
+[[probes]]
+q = "Why not keep one summary table per dashboard?"
+a = "Each one is another table to refresh, backfill and reconcile, and their definitions drift apart. Prefer a small number of shared summaries at a clearly stated grain."
+
+[[examples]]
+title = "Daily unique users do not add up"
+setup = '''
+CREATE TABLE visits (visit_day DATE, user_id INTEGER);
+INSERT INTO visits VALUES
+  ('2026-03-01', 1), ('2026-03-01', 2),
+  ('2026-03-02', 1), ('2026-03-02', 2), ('2026-03-02', 3),
+  ('2026-03-03', 1);
+'''
+code = '''
+WITH daily AS (
+  SELECT visit_day, COUNT(DISTINCT user_id) AS unique_users
+  FROM visits
+  GROUP BY visit_day
+)
+SELECT
+  (SELECT SUM(unique_users) FROM daily) AS sum_of_daily_uniques,
+  (SELECT COUNT(DISTINCT user_id) FROM visits) AS unique_users_in_period
+'''
+note = "The daily summary adds up to 6, and only 3 different users visited. A distinct count has to be computed from the detail, or from a sketch that can be merged."

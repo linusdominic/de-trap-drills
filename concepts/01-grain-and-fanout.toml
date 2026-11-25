@@ -1,0 +1,97 @@
+title = "Grain and fan-out"
+area = "SQL correctness"
+level = "core"
+summary = "Every table has a grain: what one row means. A join to a finer table repeats rows, and a sum taken after it counts them again."
+drills = ["fanout-join-sum", "sum-after-dedupe"]
+
+idea = '''
+The grain of a table is what one row stands for: one order, one order line, one customer per day. Say it as a sentence before you write a query. Most wrong totals come from skipping that sentence.
+
+A join does not keep the grain of the left table. It produces one row per matching pair. Join `orders` (one row per order) to `shipments` (several rows per order) and every order amount now appears once per shipment. `SUM(amount)` over that result adds the same order two or three times. Nothing fails and the number looks plausible.
+
+There are three ways out, in the order to prefer them:
+
+1. Aggregate the finer table to the grain of the coarser one first, then join. Each side now has one row per key.
+2. Take the measure from the table that owns it, in a separate query or CTE, and join the two results.
+3. If you cannot avoid the fan-out, count or sum distinct keys, never the repeated measure. `COUNT(DISTINCT order_id)` is safe after a fan-out. `SUM(DISTINCT amount)` is not: two different orders with the same amount collapse into one.
+
+The check is cheap. Count the rows and the distinct keys before and after the join:
+
+```sql
+SELECT COUNT(*) AS row_count, COUNT(DISTINCT order_id) AS orders
+FROM orders JOIN shipments USING (order_id);
+```
+
+If `row_count` is larger than `orders`, the join fanned out.
+'''
+
+asked = [
+  "Total revenue per customer, and the number of shipments per customer, in one query.",
+  "This dashboard total is higher than finance's number. Where would you look first?",
+  "What is the grain of the table you just designed?",
+]
+
+answer = [
+  "State the grain of each table in one sentence before joining them.",
+  "Name which side of the join can repeat the other, and what that does to the measure.",
+  "Aggregate each measure at the grain of the table that owns it, then join the results.",
+  "Offer the row count against distinct key count as the check you would run.",
+  "Say why `SUM(DISTINCT ...)` is not a fix: equal values from different rows merge.",
+]
+
+[[probes]]
+q = "Why not just add DISTINCT?"
+a = "`SELECT DISTINCT` removes rows that are identical in every selected column, so it only works by accident. `SUM(DISTINCT amount)` also merges two real orders that happen to have the same amount."
+
+[[probes]]
+q = "Two fact tables share a customer. How do you report both measures per customer?"
+a = "Aggregate each fact to one row per customer in its own CTE and join the two results on the customer key. Joining the facts to each other first multiplies them: every order pairs with every shipment of the same customer."
+
+[[probes]]
+q = "How would you stop this from reaching a dashboard?"
+a = "A uniqueness test on the declared key of each model, and a reconciliation test that compares the total with the source table's total. Both fail on the day a fan-out is introduced."
+
+[[examples]]
+title = "The same orders, summed before and after a join"
+setup = '''
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);
+INSERT INTO orders VALUES (1, 10, 100), (2, 10, 40), (3, 11, 70);
+CREATE TABLE shipments (shipment_id INTEGER, order_id INTEGER);
+INSERT INTO shipments VALUES (501, 1), (502, 1), (503, 2), (504, 3), (505, 3), (506, 3);
+'''
+code = '''
+SELECT 'orders alone' AS source, COUNT(*) AS row_count, SUM(amount) AS revenue
+FROM orders
+UNION ALL
+SELECT 'orders joined to shipments', COUNT(*), SUM(o.amount)
+FROM orders AS o
+JOIN shipments AS s ON s.order_id = o.order_id
+ORDER BY row_count
+'''
+note = "Three orders worth 210 become six rows worth 450. Order 3 was counted three times."
+
+[[examples]]
+title = "Aggregate each side to the same grain, then join"
+setup = '''
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);
+INSERT INTO orders VALUES (1, 10, 100), (2, 10, 40), (3, 11, 70);
+CREATE TABLE shipments (shipment_id INTEGER, order_id INTEGER);
+INSERT INTO shipments VALUES (501, 1), (502, 1), (503, 2), (504, 3), (505, 3), (506, 3);
+'''
+code = '''
+WITH revenue AS (
+  SELECT customer_id, SUM(amount) AS revenue
+  FROM orders
+  GROUP BY customer_id
+), shipped AS (
+  SELECT o.customer_id, COUNT(*) AS shipments
+  FROM shipments AS s
+  JOIN orders AS o ON o.order_id = s.order_id
+  GROUP BY o.customer_id
+)
+SELECT r.customer_id, r.revenue, s.shipments
+FROM revenue AS r
+JOIN shipped AS s ON s.customer_id = r.customer_id
+ORDER BY r.customer_id
+'''
+note = "Each CTE has one row per customer, so the final join cannot repeat anything."

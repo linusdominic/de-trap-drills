@@ -1,0 +1,51 @@
+title = "Table formats and file layout"
+area = "Pipeline design"
+level = "advanced"
+summary = "A lake table is columnar files, a metadata layer that makes them behave like a table, and a layout that decides how fast it reads."
+
+idea = '''
+A data lake table has three layers, and a question usually probes one of them.
+
+**Files.** Analytical data is stored in columnar files, most often Parquet. The values of one column sit together, so a query reads only the columns it needs, similar values compress well, and each row group carries min/max statistics for skipping. Row formats such as CSV and JSON are fine for landing data and poor for querying it.
+
+**Table format.** A directory of Parquet files is not a table. A reader can see half of a write, two writers can clash, and there is no way to update or delete a row. Table formats (Apache Iceberg, Delta Lake, Apache Hudi) add a metadata layer that lists exactly which files make up each version of the table. That gives you:
+
+- atomic commits, so readers see all of a write or none of it
+- snapshots, which allow time travel and rollback
+- row-level `MERGE`, `UPDATE` and `DELETE`
+- rules for schema evolution, and file-level statistics for planning
+
+**Layout.** How rows are divided among files decides performance:
+
+- **Partitioning.** Split by a low-cardinality column that most queries filter on, usually a date. A partition that is too fine (by user, by minute) creates far too many small files.
+- **Ordering inside a partition**, on the next most common filter, so that statistics are selective.
+- **File size.** Many tiny files make planning and reading slow, because each one costs a listing, an open and a footer read. Streaming and frequent small writes cause this. The fix is compaction: rewrite small files into larger ones on a schedule, commonly aiming for a hundred megabytes to a gigabyte per file.
+
+Updates bring their own maintenance. A format either rewrites the affected files (copy-on-write) or records the changes beside them and merges at read time (merge-on-read). Either way, old snapshots and files must be expired or storage grows without limit.
+'''
+
+asked = [
+  "Why Parquet and not CSV or JSON?",
+  "What do Iceberg or Delta give you that a folder of Parquet files does not?",
+  "A streaming job has written millions of tiny files. What is the problem, and how do you fix it?",
+]
+
+answer = [
+  "Explain columnar storage: column pruning, compression, statistics.",
+  "Explain the table format as a metadata layer: atomic commits, snapshots, row-level changes.",
+  "Choose a partition column by cardinality and by what queries filter on, and warn about over-partitioning.",
+  "Describe the small-files problem and compaction.",
+  "Mention maintenance: expiring snapshots, and copy-on-write against merge-on-read.",
+]
+
+[[probes]]
+q = "Iceberg or Delta?"
+a = "Both add ACID commits, time travel and merges on top of Parquet. Delta Lake is most tightly integrated with Databricks and Spark. Iceberg was designed to be engine-neutral and has hidden partitioning and partition evolution. Choose by the engines you must support."
+
+[[probes]]
+q = "Copy-on-write or merge-on-read?"
+a = "Copy-on-write rewrites whole files on each change, so writes are expensive and reads are fast. Merge-on-read writes small delete or delta files, so writes are cheap and reads pay to merge them until compaction. Choose by the ratio of updates to reads."
+
+[[probes]]
+q = "How do you change the partitioning of a large table?"
+a = "In most setups, by rewriting the table into the new layout. Iceberg supports partition evolution, where new data uses the new scheme and old files keep the old one. Either way, test the main queries against the new layout first."

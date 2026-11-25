@@ -1,0 +1,54 @@
+title = "Join strategies in Spark: broadcast, sort-merge, shuffled hash"
+area = "Spark"
+level = "advanced"
+summary = "Spark picks a join strategy from size estimates. A broadcast join moves no large data; the others shuffle both sides, and a hot key lands in one task."
+drills = ["broadcast-join-no-shuffle", "hot-key-partition"]
+
+idea = '''
+Spark runs an equality join in one of three ways, and the physical plan names which.
+
+- **Broadcast hash join.** Spark collects the small side, sends a copy to every executor, and each task of the large side probes it locally. The large side is not shuffled. Spark chooses it when its size estimate for one side is below `spark.sql.autoBroadcastJoinThreshold` (10 MB by default), or when you ask for it with `broadcast(df)`.
+- **Sort-merge join.** Both sides are shuffled by the join key, sorted and merged. The usual choice for two large tables, because it can spill to disk.
+- **Shuffled hash join.** Both sides are shuffled, then a hash table is built per partition on the smaller side. There is no sort, but each partition's build side must fit in memory.
+
+In `explain()` output an `Exchange hashpartitioning(...)` is a shuffle. A sort-merge join shows one on each side. A broadcast join shows a `BroadcastExchange` on the small side only.
+
+```python
+from pyspark.sql.functions import broadcast
+
+facts.join(broadcast(dims), "customer_id")
+```
+
+The threshold works on estimates, and estimates can be wrong. After a filter, an aggregate or a UDF, Spark may believe a tiny result is large. Adaptive query execution (AQE) corrects part of this: once a shuffle stage has run and its real size is known, it can replace a planned sort-merge join with a broadcast join.
+
+A broadcast that is too large does not run slowly, it fails. The small side is collected on the driver and held in memory on every executor, so the symptom is an out-of-memory error or a broadcast timeout.
+
+**Skew** is the other failure. A shuffle sends every row with the same key to the same partition. If one key (a NULL, a guest customer, a default value) carries most of the rows, one task does most of the work. AQE's skew-join handling splits oversized partitions in sort-merge joins. Otherwise process the hot key separately, or salt it.
+'''
+
+asked = [
+  "How does Spark decide between a broadcast join and a sort-merge join?",
+  "One task of a join stage runs for an hour while the others finish in seconds. What is going on?",
+  "When would you add a broadcast hint, and when would you not?",
+]
+
+answer = [
+  "Name the three strategies and say what each one moves across the network.",
+  "The choice comes from a size estimate against a threshold, or from a hint, not from the real size.",
+  "Show how to read it in the plan: an Exchange on both sides, or a BroadcastExchange on one.",
+  "AQE can change the strategy at run time and split skewed partitions.",
+  "A broadcast can run out of memory because the driver collects it and every executor holds a copy.",
+  "For a hot key: handle it separately, or salt the key.",
+]
+
+[[probes]]
+q = "The dimension has a thousand rows, but Spark planned a sort-merge join. Why might that be?"
+a = "Its size estimate was above the threshold, for example because the rows come out of a join or UDF that Spark cannot size, or because broadcasting was switched off by setting the threshold to -1. Read the plan, then add a `broadcast()` hint or fix the statistics."
+
+[[probes]]
+q = "How does salting work?"
+a = "Add a random bucket number to the key on the large side, and replicate each row of the small side once per bucket. The hot key is then spread over several partitions. The price is a larger small side and, for aggregates, a second aggregation step."
+
+[[probes]]
+q = "Does a NULL join key cause skew?"
+a = "In an inner join NULL keys never match, and Spark filters them out before the shuffle. In an outer join they must be kept and all hash to the same partition. Split them off, process them without the join, and union them back."

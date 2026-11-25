@@ -1,0 +1,24 @@
+title = "The modeling round"
+round = "Data modeling"
+summary = "From a product description to fact and dimension tables: grain first, then measures, then how history is kept."
+outcome = "You can drive a modeling question in six steps, state the grain of every table in one sentence, and defend how each attribute keeps its history."
+
+[[stages]]
+title = "Start from the questions"
+note = "The model exists to answer business questions. Name them, then name the grain."
+steps = ["c:modeling-approach", "c:fact-tables", "d:sum-after-dedupe", "d:fanout-join-sum"]
+
+[[stages]]
+title = "Measures that do not add up"
+note = "An average, a ratio and a distinct count cannot be summed. Store what can."
+steps = ["c:additive-measures", "d:avg-of-averages"]
+
+[[stages]]
+title = "Dimensions and their history"
+note = "Interviewers then ask you to write SQL against your own model. These two drills are that follow-up."
+steps = [
+  "c:dimension-design",
+  "c:slowly-changing-dimensions",
+  "d:scd2-as-of-join",
+  "d:scd2-load-null-change",
+]

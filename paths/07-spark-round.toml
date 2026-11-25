@@ -1,0 +1,40 @@
+title = "The Spark round"
+round = "Spark"
+summary = "Predict what Spark does with a piece of code: how often it runs, how many partitions, which join, what reaches the scan. Every answer was recorded from a real run."
+outcome = "You can read a physical plan, say where a job shuffles and why one task is slow, and name the fix with the evidence you would look for."
+
+[[stages]]
+title = "Nothing runs until it has to"
+note = "Laziness is the model everything else rests on, and the source of the first surprise."
+steps = ["c:spark-execution-model", "d:lazy-recompute"]
+
+[[stages]]
+title = "Partitions"
+note = "How many tasks a stage has decides how fast it runs. Four cases where the number is not the one in the code."
+steps = [
+  "c:spark-partitions",
+  "d:coalesce-cannot-increase",
+  "d:coalesce-pulls-upstream",
+  "d:shuffle-partitions-aqe",
+  "d:window-single-partition",
+]
+
+[[stages]]
+title = "Joins and plans"
+note = "The plan tells you what the optimizer decided. Read it before you explain a cost."
+steps = [
+  "c:spark-join-strategies",
+  "d:broadcast-join-no-shuffle",
+  "c:spark-plans-and-pushdown",
+  "d:udf-blocks-pushdown",
+]
+
+[[stages]]
+title = "Wrong answers and slow jobs"
+note = "One bug that changes a total without an error, and the most common reason a single task runs for an hour."
+steps = [
+  "c:spark-dataframe-pitfalls",
+  "d:union-by-position",
+  "c:diagnosing-a-slow-spark-job",
+  "d:hot-key-partition",
+]

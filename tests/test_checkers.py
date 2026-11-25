@@ -131,19 +131,29 @@ def test_generated_files_are_up_to_date() -> None:
 
 def test_readme_counts_match_the_drills() -> None:
     drills = load_drills()
-    sql = sum(d.track == "sql" for d in drills)
+    count = {track: sum(d.track == track for d in drills) for track in ("sql", "python", "spark", "airflow")}
     readme = sitebuild.README.read_text(encoding="utf-8")
-    assert f"{sql} SQL and {len(drills) - sql} Python drills" in readme
+    assert (
+        f"{count['sql']} SQL, {count['python']} Python, {count['spark']} Spark and {count['airflow']} Airflow drills"
+        in readme
+    )
     assert f"for all {len(drills)} drills" in readme
-    assert f"All {sql} SQL reference answers" in readme
-    assert f"the {2 * len(drills)} answers that ship" in readme
+    assert f"All {count['sql']} SQL reference answers" in readme
+    assert f"the {2 * (count['sql'] + count['python'])} answers that ship" in readme
     for drill in drills:
         assert f"`{drill.id}`" in readme, f"{drill.id} is missing from the README's table of traps"
 
 
 def test_site_uses_the_same_numeric_rule_as_the_package() -> None:
-    script = (ROOT / "docs" / "app.js").read_text(encoding="utf-8")
+    script = (ROOT / "docs" / "engine.js").read_text(encoding="utf-8")
     match = re.search(r"const NUMERIC = /(.+)/;", script)
     assert match is not None
     assert match.group(1) == NUMERIC.pattern
     assert "'\\\\.0$'" in script, "the site strips a trailing .0 the same way"
+
+
+def test_readme_names_the_test_count() -> None:
+    # A reminder to update the README when tests are added; the number is checked by hand
+    # against the pytest summary, so this only checks that a number is stated.
+    readme = sitebuild.README.read_text(encoding="utf-8")
+    assert re.search(r"\d+ tests pass", readme)

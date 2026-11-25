@@ -1,0 +1,93 @@
+title = "Window functions: ranks, frames and ties"
+area = "SQL correctness"
+level = "core"
+summary = "A window function computes a value for each row from related rows. Ties and the default frame are where the answers go wrong."
+drills = ["top-n-ties", "second-highest-ties", "rolling-7d-missing-days"]
+
+idea = '''
+A window function looks at a set of rows around the current row and returns a value without collapsing the rows. The `OVER` clause has three parts:
+
+- `PARTITION BY` splits the rows into independent groups.
+- `ORDER BY` puts the rows of each group in sequence.
+- The **frame** says which of those rows the function may see.
+
+**Ranking.** `ROW_NUMBER`, `RANK` and `DENSE_RANK` return the same numbers until two rows tie. Then `ROW_NUMBER` gives 1, 2, 3 and picks the order of the tied rows arbitrarily, `RANK` gives 1, 1, 3, and `DENSE_RANK` gives 1, 1, 2. "Top three sellers" and "top three sales levels" are different questions. Ask which one is meant.
+
+**Frames.** When you write `ORDER BY` and no frame, the standard default is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`. `RANGE` works on values, so the current row's peers, the rows with the same `ORDER BY` value, are all included. A running total then jumps by the whole tied group at once, and `LAST_VALUE` returns the last peer, not the last row of the partition. `ROWS` counts physical rows. Write the frame you mean:
+
+```sql
+SUM(amount) OVER (
+  PARTITION BY account_id ORDER BY posted_at, entry_id
+  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+```
+
+**Neighbours.** `LAG` and `LEAD` return the previous or next row, not the previous or next day. If a day has no row, they skip it.
+
+**Filtering.** Window functions run after `WHERE`, `GROUP BY` and `HAVING`, so you cannot filter on one in the same `SELECT`. Wrap the query in a subquery, or use `QUALIFY`, which DuckDB, Snowflake, BigQuery and Databricks support and PostgreSQL does not.
+'''
+
+asked = [
+  "Top three products per category by revenue. What happens when two products tie?",
+  "What is the difference between ROW_NUMBER, RANK and DENSE_RANK?",
+  "Add a running balance to this ledger.",
+  "What frame does a window function use when you do not write one?",
+]
+
+answer = [
+  "Ask what a tie should do before choosing the ranking function.",
+  "Make `ROW_NUMBER` deterministic by adding a unique column to its `ORDER BY`.",
+  "State the default frame and write an explicit `ROWS` frame for running and rolling calculations.",
+  "Point out that `ROWS n PRECEDING` counts rows, so a rolling window over days needs one row per day.",
+  "Know that a window result is filtered in an outer query, or with `QUALIFY` where the engine has it.",
+]
+
+[[probes]]
+q = "Your running total shows the same value on two rows. Why?"
+a = "The two rows tie on the `ORDER BY` column and the default frame is `RANGE`, which includes all peers of the current row. An explicit `ROWS` frame with a unique ordering column gives one step per row."
+
+[[probes]]
+q = "Why does LAST_VALUE return the current row's value?"
+a = "With the default frame the window ends at the current row, so the last value it can see is the current row or its last peer. Extend the frame to `UNBOUNDED FOLLOWING`, or use `FIRST_VALUE` with the order reversed."
+
+[[probes]]
+q = "Can you filter on a window function in WHERE?"
+a = "No. `WHERE` runs before the window is computed. Use a subquery or CTE and filter outside it, or `QUALIFY` in the engines that have it."
+
+[[probes]]
+q = "How do you compute a seven-day rolling sum when some days have no rows?"
+a = "Either build one row per calendar day first and use `ROWS BETWEEN 6 PRECEDING AND CURRENT ROW`, or use a `RANGE` frame with an interval of six days where the engine supports it. A `ROWS` frame on sparse data spans more than seven days."
+
+[[examples]]
+title = "Three ranking functions on tied scores"
+setup = '''
+CREATE TABLE scores (team VARCHAR, player VARCHAR, points INTEGER);
+INSERT INTO scores VALUES
+  ('red', 'ana', 30), ('red', 'ben', 30), ('red', 'cy', 25), ('red', 'dee', 20),
+  ('blue', 'eli', 18), ('blue', 'fay', 18);
+'''
+code = '''
+SELECT team, player, points,
+       ROW_NUMBER() OVER (PARTITION BY team ORDER BY points DESC, player) AS row_number,
+       RANK()       OVER (PARTITION BY team ORDER BY points DESC) AS rank,
+       DENSE_RANK() OVER (PARTITION BY team ORDER BY points DESC) AS dense_rank
+FROM scores
+ORDER BY team, points DESC, player
+'''
+note = "The three columns differ only where points tie. RANK skips to 3 after the tie in red; DENSE_RANK does not. ROW_NUMBER needed `player` in its ORDER BY to give ana and ben a fixed order."
+
+[[examples]]
+title = "The default frame against an explicit ROWS frame"
+setup = '''
+CREATE TABLE deposits (deposit_id INTEGER, day DATE, amount INTEGER);
+INSERT INTO deposits VALUES
+  (1, '2026-03-01', 10), (2, '2026-03-02', 20), (3, '2026-03-02', 5), (4, '2026-03-03', 7);
+'''
+code = '''
+SELECT deposit_id, day, amount,
+       SUM(amount) OVER (ORDER BY day) AS default_frame,
+       SUM(amount) OVER (ORDER BY day, deposit_id
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rows_frame
+FROM deposits
+ORDER BY day, deposit_id
+'''
+note = "Both deposits of 2 March show 35 under the default frame, because RANGE includes the peer row. The ROWS frame steps 30, then 35."

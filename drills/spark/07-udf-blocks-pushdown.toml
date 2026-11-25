@@ -1,0 +1,69 @@
+title = "The same filter, written as a UDF"
+family = "Plans"
+pattern = "Filter pushdown"
+obvious = "same"
+question = "What does the Parquet scan's `PushedFilters` contain for the UDF version?"
+
+prompt = '''
+A Parquet table of people is filtered to one country. One engineer writes the condition with a column expression. Another already has a Python helper for it and wraps that in a UDF. Both return the same rows.
+'''
+
+code = '''
+people = spark.range(100_000).withColumn("country", F.when(F.col("id") % 10 == 0, "PK").otherwise("US"))
+people.write.mode("overwrite").parquet(f"{tmp}/people")
+table = spark.read.parquet(f"{tmp}/people")
+
+@F.udf("boolean")
+def is_pk(country):
+    return country == "PK"
+
+builtin = table.filter(F.col("country") == "PK")
+with_udf = table.filter(is_pk("country"))
+'''
+
+measure = '''
+import re
+
+def pushed(frame):
+    return re.search(r"PushedFilters: (\[.*?\])", plan_of(frame)).group(1)
+
+print(f"rows: built-in {builtin.count()}, UDF {with_udf.count()}")
+print("built-in expression  PushedFilters:", pushed(builtin))
+print("Python UDF           PushedFilters:", pushed(with_udf))
+print("the UDF plan also contains:", ", ".join(sorted({w for w in re.findall(r"[A-Za-z]+", plan_of(with_udf)) if "Python" in w})))
+answer("none" if pushed(with_udf) == "[]" else "same")
+'''
+
+trap = '''
+Both queries return the same rows, so the difference is invisible in the result. It is in the plan.
+
+For the column expression, Spark understands `country = 'PK'` and hands it to the Parquet reader as a pushed filter. The reader compares it with each row group's min/max statistics and skips groups that cannot match.
+
+A Python UDF is a black box. Spark cannot see inside `is_pk`, so nothing is pushed: the scan reads every row group, every row is sent to a Python worker and back (the `ArrowEvalPython` node in this plan, `BatchEvalPython` when Arrow is not in use), and only then is the filter applied.
+
+Use the built-in functions whenever one exists. They are optimised, pushed down and run in the JVM.
+'''
+
+scale = '''
+On a large partitioned table the gap is the whole table against a few files. If the logic cannot be written with built-in functions, keep a built-in filter on the partition or sort column in front of the UDF so that pruning still happens, and keep the UDF's input narrow, because every column it reads is copied to Python. Prove it by comparing `PushedFilters` and the scan's rows-read metric in the two plans.
+'''
+
+[[options]]
+value = "same"
+text = "The same filter on `country` as the built-in version"
+why = "Spark cannot translate a Python function into a filter the Parquet reader understands, so nothing reaches the scan."
+
+[[options]]
+value = "none"
+text = "Nothing: the list is empty"
+why = "A UDF is opaque to the optimizer. The scan reads everything and the filter runs afterwards, in Python."
+
+[[options]]
+value = "partial"
+text = "Only an `IsNotNull(country)` check"
+why = "Spark adds that for the built-in comparison because it knows NULL cannot equal 'PK'. It knows nothing about what the UDF does with NULL."
+
+[[options]]
+value = "error"
+text = "The plan fails: UDFs cannot be used in a filter"
+why = "They can, and the result is correct. The cost is in how much is read and where the filter runs."

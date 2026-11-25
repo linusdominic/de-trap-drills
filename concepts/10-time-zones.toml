@@ -1,0 +1,94 @@
+title = "Time zones and the local day"
+area = "Time and history"
+level = "core"
+summary = "Store instants in UTC and convert only where a question needs local meaning. \"Per day\" is a local question, and a local day is not always 24 hours."
+drills = ["local-day-boundary", "tumbling-windows-timezones"]
+
+idea = '''
+A timestamp can mean two things. An **instant** is a point on the world's timeline: it is the same moment everywhere. A **wall-clock time** is what a clock on the wall shows, and it only becomes an instant once you know the zone.
+
+The working rules:
+
+1. **Store instants in UTC.** Convert on the way in, at the edge, and keep the source's zone in its own column if you will need it.
+2. **Convert to a zone only when the question is local.** "Orders per day", "during business hours" and "at month end" are local questions. "How long did it take" is not.
+3. **Convert first, then truncate.** `CAST(ts AS DATE)` on a UTC column gives the UTC day. For a city east of Greenwich the first hours of its day belong to the previous UTC day; for a city to the west, the last hours belong to the next.
+4. **Use zone names, not offsets.** `America/New_York` is a rule that knows about daylight saving. `-05:00` is right for part of the year. Keep the zone name on the dimension row for the city, store or customer.
+
+Daylight saving breaks one more assumption: on the day the clocks change, the local day is 23 or 25 hours long. One local hour does not exist in spring, and one occurs twice in autumn. "Add 24 hours" and "the same time tomorrow" are different operations, and hourly reports show a missing or doubled hour.
+
+Type names are a trap of their own. In PostgreSQL and DuckDB, `TIMESTAMP WITH TIME ZONE` stores an instant and shows it in the session's zone; it does not store a zone. A cast between the two types depends on the session setting, so set the session zone explicitly in every job.
+
+In Python, use aware datetimes only, convert to UTC before comparing or bucketing, and use `zoneinfo` for named zones.
+'''
+
+asked = [
+  "Orders per day for each city, where the day is the city's own calendar day.",
+  "Our daily numbers differ between the dashboard and the finance report by a few orders. Why might that be?",
+  "How do you store timestamps for a product used in several countries?",
+  "Count events per hour. What happens on the day the clocks change?",
+]
+
+answer = [
+  "Separate instants from wall-clock times, and store instants in UTC.",
+  "Ask which zone defines \"a day\" for this report, and where that zone is stored.",
+  "Convert to local time before truncating to a day or an hour.",
+  "Use IANA zone names so that daylight saving is handled; a fixed offset is wrong for part of the year.",
+  "Mention the 23 and 25 hour days and what they do to hourly and \"same time tomorrow\" logic.",
+  "Set the session time zone explicitly instead of relying on a default.",
+]
+
+[[probes]]
+q = "The events table has a UTC timestamp and no zone. Can you report by local day?"
+a = "Only if the zone can be found elsewhere, usually on the store, city or user dimension. Join to it and convert per row. If nothing records the zone, the local day cannot be recovered, and I would say so instead of assuming one."
+
+[[probes]]
+q = "Why is storing local time without the zone a problem?"
+a = "The value is ambiguous. In the autumn changeover the same wall-clock hour happens twice, and two rows from different zones cannot be ordered. You can no longer tell which event came first."
+
+[[probes]]
+q = "A daily job runs at 02:30 local time. What happens on changeover days?"
+a = "In spring 02:30 may not exist, so the job is skipped or shifted, depending on the scheduler. In autumn it may run twice. Schedule in UTC, or pick a local time outside the changeover hours, and make the job idempotent."
+
+[[probes]]
+q = "Two partitions of data were written by jobs in different regions. The hourly counts disagree. Where do you look?"
+a = "At how each job turned timestamps into partition values. If one truncated in its server's local zone and the other in UTC, the same instant landed in different hours. Partition by a UTC-derived value in both."
+
+[[examples]]
+title = "The UTC day and the local day"
+setup = '''
+CREATE TABLE calls (call_id INTEGER, city VARCHAR, started_at TIMESTAMP, utc_offset_minutes INTEGER);
+INSERT INTO calls VALUES
+  (1, 'Mumbai', '2026-03-01 19:15:00',  330),
+  (2, 'Mumbai', '2026-03-02 10:00:00',  330),
+  (3, 'Lima',   '2026-03-02 03:30:00', -300),
+  (4, 'Lima',   '2026-03-02 15:00:00', -300),
+  (5, 'Lisbon', '2026-03-02 09:00:00',    0);
+'''
+code = '''
+SELECT call_id, city,
+       CAST(started_at AS DATE) AS utc_day,
+       CAST(started_at + utc_offset_minutes * INTERVAL '1 minute' AS DATE) AS local_day
+FROM calls
+ORDER BY call_id
+'''
+note = "Calls 1 and 3 fall on a different local day from their UTC day, in opposite directions. Lisbon matches, which is why a test written in a UTC office passes. Fixed offsets are used here so the example runs anywhere; they are valid for these three cities on these dates."
+
+[[examples]]
+title = "How long is a day in New York?"
+kind = "python"
+code = '''
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+zone = ZoneInfo("America/New_York")
+
+def hours_in_local_day(year, month, day):
+    start = datetime(year, month, day, tzinfo=zone)
+    end = datetime(year, month, day, tzinfo=zone) + timedelta(days=1)
+    return (end.astimezone(timezone.utc) - start.astimezone(timezone.utc)) / timedelta(hours=1)
+
+for date in [(2026, 3, 7), (2026, 3, 8), (2026, 11, 1)]:
+    start = datetime(*date, tzinfo=zone)
+    print(start.date(), "offset at midnight", start.strftime("%z"), "hours in the day:", hours_in_local_day(*date))
+'''
+note = "8 March 2026 has 23 hours in New York and 1 November has 25. Adding one day to a local midnight gives the next local midnight; the elapsed time between them is only visible after converting both to UTC."

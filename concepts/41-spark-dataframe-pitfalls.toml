@@ -1,0 +1,54 @@
+title = "DataFrame pitfalls: union by position, arbitrary rows, pruned work"
+area = "Spark"
+level = "core"
+summary = "DataFrame code can run without error and return the wrong rows: `union` ignores column names, and `dropDuplicates` keeps whichever row it meets first."
+drills = ["union-by-position"]
+
+idea = '''
+Some DataFrame methods do less than their names suggest. None of the cases below raises an error.
+
+**`union` matches columns by position.** It ignores column names, like `UNION ALL` in SQL.
+
+```python
+jan = spark.createDataFrame([(1, 100, 5)], ["order_id", "amount", "discount"])
+feb = spark.createDataFrame([(2, 7, 300)], ["order_id", "discount", "amount"])
+jan.union(feb)        # feb's discount lands in the amount column
+jan.unionByName(feb)  # matched by name
+```
+
+The result has the first DataFrame's column names and the second one's values in the wrong columns. `union` fails only when the column counts differ or the types cannot be reconciled. Use `unionByName`, which fails when a column is missing unless you pass `allowMissingColumns=True`.
+
+**`dropDuplicates(["key"])` keeps an arbitrary row per key.** Which one depends on partitioning and task order, and can change between runs. Sorting first does not make it reliable. To keep the latest row, rank with `row_number()` over a window ordered by a version column and a tie-breaker, and keep rank 1.
+
+**NULLs follow SQL.** `col != "a"` drops the rows where the column is NULL. Use `eqNullSafe` for a comparison that treats NULL as a value, and remember that join keys never match on NULL.
+
+**Schema inference guesses.** Reading CSV with `inferSchema` costs an extra pass over the data, and the guess depends on the file: an id column with leading zeros becomes an integer, and a column that happens to be empty today is typed differently from yesterday. Declare the schema for anything that runs on a schedule.
+
+**The optimizer removes work the result does not need.** `df.count()` needs no columns, so a column computed by an expensive function may never be evaluated. A `count()` is therefore not a test that a transformation works, and timing it does not measure the transformation.
+'''
+
+asked = [
+  "What is the difference between `union` and `unionByName`?",
+  "You deduplicate with `dropDuplicates` and get different rows on two runs. Why?",
+  "Would you let Spark infer the schema of a daily CSV feed?",
+]
+
+answer = [
+  "`union` is positional; use `unionByName` whenever you do not control the column order of both sides.",
+  "`dropDuplicates` on a subset keeps an arbitrary row; rank with a deterministic order to keep the latest.",
+  "NULL comparisons behave as in SQL, and `eqNullSafe` is the NULL-safe form.",
+  "Declare schemas for scheduled jobs instead of inferring them.",
+  "A `count()` can skip the work you meant to test, so validate with an action that uses the columns.",
+]
+
+[[probes]]
+q = "Both DataFrames have the same columns in the same order today. Is union fine?"
+a = "It works until someone reorders a `select` or adds a column upstream, and then it is wrong without an error. `unionByName` costs nothing and turns that change into either a correct result or a failure you can see."
+
+[[probes]]
+q = "How do you keep the latest row per key in Spark?"
+a = "`row_number()` over a window partitioned by the key and ordered by the version column descending, plus a unique tie-breaker, then keep rank 1. `max_by` inside a `groupBy` also works when you need only a few columns."
+
+[[probes]]
+q = "A new Parquet file has a column the old files lack. What happens on read?"
+a = "With a declared schema, the column is NULL for the old files. Without one, Spark takes the schema from the files it samples, and Parquet schema merging is off by default, so the new column can be missing from the result. Declare the schema or enable merging deliberately."

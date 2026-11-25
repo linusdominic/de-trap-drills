@@ -1,0 +1,85 @@
+title = "Schema evolution and data contracts"
+area = "Pipeline design"
+level = "advanced"
+summary = "Upstream schemas change, so decide in advance which changes are allowed and what the pipeline does with an unknown or missing field."
+drills = ["flatten-json"]
+
+idea = '''
+Upstream schemas change. A producer team renames a field, changes a type or stops sending a column. A pipeline that assumed the old shape either fails or, worse, keeps running and loads wrong values. Schema evolution is the set of rules for which changes are allowed without coordination.
+
+Sort changes into two groups:
+
+- **Additive and compatible.** A new optional field, a new table, a wider type such as int to bigint. Existing readers keep working.
+- **Breaking.** Removing or renaming a field, changing or narrowing a type, changing the key, or changing what a value means (cents to dollars, UTC to local time). The change of meaning is the dangerous one, because it passes every schema check.
+
+The tools:
+
+- **A schema registry** for streams. Producers register each schema version, and the registry rejects one that violates the configured compatibility mode. Backward compatible means a reader on the new schema can read old data. Forward compatible means a reader on the old schema can read new data.
+- **A data contract.** A versioned agreement between the producing team and its consumers: the schema, the meaning of each field, the key, the freshness, and who is told before a breaking change. It is enforced by a check in the producer's CI, not by goodwill.
+- **Explicit policies in the pipeline.** Decide what happens to an unknown field (keep it in the raw layer; never drop it silently there) and to a missing one (NULL if it is optional, quarantine or fail if it is required).
+
+Landing the raw payload unchanged is what makes this recoverable. When a new field appears, you can replay history and extract it.
+
+Make a breaking change by adding, not replacing: publish the new field or version beside the old one, migrate the consumers, then retire the old one.
+'''
+
+asked = [
+  "An upstream team renamed a column and a dashboard was wrong for three days. How do you prevent that?",
+  "What is a data contract?",
+  "A new field shows up in the JSON events. What does your pipeline do?",
+]
+
+answer = [
+  "Classify changes as additive or breaking, and call out a change of meaning as the one that checks do not catch.",
+  "Put enforcement at the producer: a registry with a compatibility mode, or contract tests in CI.",
+  "State the pipeline's policy for unknown fields and for missing ones.",
+  "Keep the raw payload, so a new field can be backfilled.",
+  "Roll out breaking changes by versioning: add, migrate, then remove.",
+]
+
+[[probes]]
+q = "Backward or forward compatibility: which do you need?"
+a = "It depends on who upgrades first. If consumers upgrade before producers you need backward compatibility (new reader, old data). If producers upgrade first you need forward compatibility (old reader, new data). Requiring both is the safe default for a shared topic."
+
+[[probes]]
+q = "A column changes from integer to string in the source. What happens in a lake table?"
+a = "Table formats allow only certain type changes in place, mostly widening ones. An incompatible change needs a new column or a rewritten table, so land it in raw, map it explicitly in the cleaned layer, and treat it as a breaking change with the producer."
+
+[[probes]]
+q = "How do you detect a change of meaning?"
+a = "Not with schema checks. Distribution checks catch some of it: a sudden shift in a column's range, its null rate or its set of distinct values. The contract's change process is the real control."
+
+[[examples]]
+title = "A reader with a policy for unknown and missing fields"
+kind = "python"
+code = '''
+import json
+
+REQUIRED = {"order_id": int, "amount": int}
+OPTIONAL = {"coupon": str}
+
+
+def read(line):
+    record = json.loads(line)
+    missing = [name for name in REQUIRED if name not in record]
+    if missing:
+        return "quarantine", "missing " + ", ".join(missing)
+    wrong = [name for name, kind in REQUIRED.items() if not isinstance(record[name], kind)]
+    if wrong:
+        return "quarantine", "wrong type for " + ", ".join(wrong)
+    known = {**REQUIRED, **OPTIONAL}
+    row = {name: record.get(name) for name in known}
+    row["_extra"] = {key: value for key, value in record.items() if key not in known}
+    return "load", row
+
+
+lines = [
+    '{"order_id": 1, "amount": 500}',
+    '{"order_id": 2, "amount": 250, "coupon": "SPRING", "channel": "app"}',
+    '{"order_id": 3}',
+    '{"order_id": "4", "amount": 100}',
+]
+for line in lines:
+    print(read(line))
+'''
+note = "The new `channel` field is kept in `_extra`, not dropped. A missing optional field becomes None. A missing or mistyped required field sends the row to quarantine with a reason."

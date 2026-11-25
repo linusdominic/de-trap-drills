@@ -1,0 +1,78 @@
+title = "Delivery guarantees and exactly-once"
+area = "Pipeline design"
+level = "advanced"
+summary = "Exactly-once is at-least-once delivery plus a sink whose effect does not double, and the guarantee stops at the edge of the transaction."
+drills = ["latest-by-key-late-arrival"]
+
+idea = '''
+A messaging system can promise one of three things about each message.
+
+- **At-most-once.** Sent once and never retried. A failure loses the message. Acceptable for metrics you can afford to miss.
+- **At-least-once.** Retried until it is acknowledged. Nothing is lost, but a message can arrive twice: the consumer processed it, crashed before acknowledging, and receives it again after the restart.
+- **Exactly-once.** Each message affects the result once. A network cannot promise that a message is delivered exactly once, so this is always built from at-least-once delivery and a consumer whose effect does not double.
+
+There are two ways to build that consumer:
+
+- **Idempotent writes.** Every event carries a unique id. The sink upserts on that id, or the consumer remembers the ids it has applied and skips repeats. A redelivery changes nothing.
+- **Transactional writes.** The output and the consumer's position (its offset) are committed together, atomically. After a crash both roll back together, and the replay starts from a state that never included the half-finished batch. Kafka transactions, and Flink checkpoints with two-phase-commit sinks, work this way.
+
+Know where the guarantee ends. It covers state inside the transaction: the table, the offsets, the stream processor's own state. It does not cover side effects outside it. An email, a payment API call or a webhook sent from inside the job can still happen twice on a replay. Those need an idempotency key that the receiving side checks.
+
+Deduplication also needs a boundary. You cannot remember every event id forever, so keep ids for a window longer than the longest redelivery delay you support, and let a batch reconciliation catch anything older.
+'''
+
+asked = [
+  "Is exactly-once delivery possible? How would you get it?",
+  "The consumer crashed after writing to the database and before committing its offset. What happens on restart?",
+  "How do you make sure a payment event is not applied twice?",
+]
+
+answer = [
+  "Define the three guarantees and say what each one can lose or repeat.",
+  "Explain exactly-once as at-least-once delivery plus an idempotent or transactional sink.",
+  "Require a stable unique event id from the producer and deduplicate on it.",
+  "Say where the guarantee stops: side effects outside the transaction need their own idempotency key.",
+  "Bound the dedupe state with a time window and back it with a batch reconciliation.",
+]
+
+[[probes]]
+q = "Where does the event id come from?"
+a = "From the producer, when the event is created, so that a retry carries the same id. An id assigned on arrival by the consumer or the broker is different for each delivery and cannot detect a duplicate."
+
+[[probes]]
+q = "How long do you keep the ids you have seen?"
+a = "Longer than the longest redelivery or replay you intend to support, for example the retention of the topic. Older duplicates are caught by a periodic batch job that deduplicates on the id over the full history."
+
+[[probes]]
+q = "The producer retries a send and the broker stores the message twice. Whose problem is that?"
+a = "It is a duplicate created on the producer side, which consumer offsets cannot detect. An idempotent producer (Kafka offers one, using a sequence number per producer) or the event id in the payload handles it."
+
+[[examples]]
+title = "A batch delivered twice, with and without dedupe on the event id"
+kind = "python"
+code = '''
+def consume(batches):
+    naive_total = 0
+    safe_total = 0
+    seen = set()
+    for batch in batches:
+        for event in batch:
+            naive_total += event["amount"]
+            if event["id"] in seen:
+                continue
+            seen.add(event["id"])
+            safe_total += event["amount"]
+    return naive_total, safe_total
+
+
+first = [{"id": "e1", "amount": 50}, {"id": "e2", "amount": 20}]
+second = [{"id": "e3", "amount": 30}]
+# The consumer crashed before acknowledging the first batch, so it is delivered again.
+delivered = [first, first, second]
+
+naive, safe = consume(delivered)
+print("events delivered:", sum(len(batch) for batch in delivered))
+print("total, counting every delivery:", naive)
+print("total, deduplicated on id:", safe)
+'''
+note = "Five deliveries of three events. Counting deliveries gives 170; skipping ids that were already applied gives the true 100."

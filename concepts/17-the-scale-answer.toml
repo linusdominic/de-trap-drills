@@ -1,0 +1,46 @@
+title = "The scale answer"
+area = "Performance at scale"
+level = "advanced"
+summary = "A fixed order for answering \"now make it fast on 10 billion rows\": prune, shrink, avoid shuffles, precompute, then prove it."
+
+idea = '''
+Almost every SQL or design question ends with some form of "now the table has 10 billion rows". The interviewer is not asking for a list of features. They want to see that you know where the time goes, and that you would check before you claim.
+
+Work through the same order every time. It runs from the cheapest fix to the most expensive.
+
+1. **Prune.** Read less data. Filter on the partition column and the sort or clustering key, with a predicate the engine can compare against file statistics.
+2. **Shrink before joining.** Drop the columns and rows you do not need on each side before they meet. Aggregate first when that really cuts the rows that move.
+3. **Avoid shuffles.** On a cluster, moving rows between machines is usually the largest cost. Broadcast the small side, keep data co-located on the join key, and watch for a hot key.
+4. **Precompute.** If the same question is asked every day, answer it from a summary table or a materialized view that is refreshed incrementally.
+5. **Prove it.** Read the plan, and compare rows scanned and run time before and after.
+
+Step 5 is what separates a senior answer. Each of the first four is a claim about a specific engine and a specific data shape. Optimizers rewrite queries, and a rule that holds on a cluster can lose on one machine. The Scale page of this project timed several of these claims, and some did not behave as the textbook says.
+
+So phrase each step as an expectation and a check: "I expect this filter to prune to one partition. I would confirm it in the plan, by looking at the files or rows the scan reads."
+'''
+
+asked = [
+  "Your query is correct. Now the table has 10 billion rows. What changes?",
+  "This job takes four hours. Walk me through how you would make it faster.",
+  "How would you know that your change actually helped?",
+]
+
+answer = [
+  "Start from where the time goes: ask for the plan, or describe what you expect it to show, before proposing a fix.",
+  "Go in order: prune, shrink before joining, avoid shuffles, precompute.",
+  "Tie each step to the layout of the table: its partition column, its sort key, the sizes of both join sides.",
+  "State each fix as an expectation plus the check that would confirm it.",
+  "Name what the fix costs: a summary table must be refreshed, a sorted copy must be maintained.",
+]
+
+[[probes]]
+q = "What if you cannot change the table's layout?"
+a = "Then prune with what exists: make the filter comparable with the existing partitions and statistics, select fewer columns, and move repeated work into a summary table that you do own. Changing the query is cheaper than changing the storage and should come first anyway."
+
+[[probes]]
+q = "Which of the steps matters most?"
+a = "Usually pruning, because data that is never read costs nothing in every later step. But the answer comes from the plan: if one join stage moves most of the rows, that stage is the thing to fix."
+
+[[probes]]
+q = "How do you prove the improvement?"
+a = "Run both versions on the same data, compare the rows or bytes scanned in the plan and the run time over several runs, and confirm that the two results are identical. A faster query that returns a different answer is a bug."

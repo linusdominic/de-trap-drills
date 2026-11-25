@@ -1,0 +1,111 @@
+title = "Deduplication and the latest record"
+area = "SQL correctness"
+level = "core"
+summary = "A change feed holds one row per version of a thing: rank the versions of each key, keep one, and say what breaks a tie."
+drills = ["dedupe-latest", "sum-after-dedupe", "login-streaks-duplicates", "latest-by-key-late-arrival"]
+
+idea = '''
+Before you remove duplicates, say which kind you have. They need different fixes.
+
+- **Exact resends.** The same row delivered twice. Every column matches.
+- **Versions.** The same key with different values, because the source sends the whole row again on each edit. This is what a change feed or an append-only landing table holds.
+- **Business duplicates.** One real customer under two keys. No query on a single table fixes that; it needs matching rules.
+
+`SELECT DISTINCT` only handles the first kind, because it compares every selected column. `MAX(amount)` or `MAX(status)` per key is not "the latest" either: it picks the largest value column by column, and can build a row that never existed.
+
+For versions, rank the rows of each key by recency and keep the first:
+
+```sql
+SELECT *
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY payment_id ORDER BY updated_at DESC, seq DESC) AS rn
+  FROM payment_feed
+) AS versions
+WHERE rn = 1;
+```
+
+The second ordering column is the tie-break. If two versions can share an `updated_at`, `ROW_NUMBER` still returns one row, but which one is arbitrary and can change between runs. Order by something unique within the key, such as an ingestion sequence or the source's log position.
+
+This form is standard SQL. Shorter spellings are engine-specific: `QUALIFY` in DuckDB, Snowflake, BigQuery and Databricks, `DISTINCT ON` in PostgreSQL and DuckDB, and an `arg_max` or `max_by` aggregate in several engines.
+
+Deduplicate before you aggregate or join, not after. A sum over the raw feed counts every version.
+'''
+
+asked = [
+  "This table is loaded from a change feed. Give me the current state of each order.",
+  "The source sometimes sends the same event twice. How do you make the load safe?",
+  "Why does this revenue number go up every time the job reruns?",
+]
+
+answer = [
+  "Say which kind of duplicate it is: an exact resend, a new version, or two keys for one real thing.",
+  "Name the key that identifies the thing and the column that orders its versions.",
+  "Rank per key with `ROW_NUMBER` and keep the first row, with a tie-break that makes the result deterministic.",
+  "Explain why `DISTINCT` and a `MAX` per column return wrong rows on versioned data.",
+  "Reduce the table to the right grain before any aggregate or join.",
+  "Offer the check: total rows against distinct keys.",
+]
+
+[[probes]]
+q = "Two versions have the same updated_at. Which one do you keep?"
+a = "Whichever a second ordering column says, and I would name it: an ingestion sequence, a log sequence number or a file offset. Without one the choice is arbitrary, so the same query can return different rows on different runs."
+
+[[probes]]
+q = "ROW_NUMBER, or a GROUP BY with arg_max?"
+a = "They answer the same question. `arg_max` in DuckDB or `max_by` in Snowflake, Spark and Trino returns one column at a time, so with many columns `ROW_NUMBER` is clearer. Which is faster depends on the engine, and some plan both the same way, so read the plan instead of assuming."
+
+[[probes]]
+q = "The table holds ten years of history. Do you rank all of it every night?"
+a = "No. Keep a current-state table, deduplicate only the new batch, and merge the batch in on the key, replacing a row only when the incoming version is newer."
+
+[[probes]]
+q = "A retry delivers an old version after a newer one. What happens?"
+a = "Nothing, if the rule compares versions and not arrival order: an incoming row replaces the stored one only when its version is greater. \"Last one received wins\" is only correct for ordered input."
+
+[[examples]]
+title = "How many rows, how many things"
+setup = '''
+CREATE TABLE payment_feed (payment_id INTEGER, status VARCHAR, amount INTEGER, updated_at TIMESTAMP, seq INTEGER);
+INSERT INTO payment_feed VALUES
+  (1, 'pending',  50, '2026-03-01 09:00:00', 1),
+  (1, 'paid',     50, '2026-03-01 09:05:00', 2),
+  (2, 'pending',  80, '2026-03-01 09:10:00', 3),
+  (2, 'pending',  80, '2026-03-01 09:10:00', 4),
+  (3, 'pending',  30, '2026-03-01 09:20:00', 5),
+  (3, 'paid',     30, '2026-03-01 09:30:00', 6),
+  (3, 'refunded', 30, '2026-03-01 09:30:00', 7);
+'''
+code = '''
+SELECT COUNT(*) AS feed_rows,
+       COUNT(DISTINCT payment_id) AS payments,
+       (SELECT COUNT(*)
+        FROM (SELECT DISTINCT payment_id, status, amount, updated_at FROM payment_feed) AS d
+       ) AS rows_after_distinct
+FROM payment_feed
+'''
+note = "Seven rows describe three payments. DISTINCT removes only the exact resend of payment 2 and leaves six rows."
+
+[[examples]]
+title = "One row per payment, with a tie-break"
+setup = '''
+CREATE TABLE payment_feed (payment_id INTEGER, status VARCHAR, amount INTEGER, updated_at TIMESTAMP, seq INTEGER);
+INSERT INTO payment_feed VALUES
+  (1, 'pending',  50, '2026-03-01 09:00:00', 1),
+  (1, 'paid',     50, '2026-03-01 09:05:00', 2),
+  (2, 'pending',  80, '2026-03-01 09:10:00', 3),
+  (2, 'pending',  80, '2026-03-01 09:10:00', 4),
+  (3, 'pending',  30, '2026-03-01 09:20:00', 5),
+  (3, 'paid',     30, '2026-03-01 09:30:00', 6),
+  (3, 'refunded', 30, '2026-03-01 09:30:00', 7);
+'''
+code = '''
+SELECT payment_id, status, amount, updated_at
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY payment_id ORDER BY updated_at DESC, seq DESC) AS rn
+  FROM payment_feed
+) AS versions
+WHERE rn = 1
+ORDER BY payment_id
+'''
+note = "Payment 3 has two versions stamped 09:30. The sequence number decides between them, so the answer is the same on every run."

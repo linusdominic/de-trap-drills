@@ -1,0 +1,78 @@
+title = "Idempotency and backfills"
+area = "Pipeline design"
+level = "advanced"
+summary = "A job is safe to retry, rerun and backfill only if running it twice leaves the same table as running it once."
+
+idea = '''
+A job is idempotent when running it twice leaves the same result as running it once. Pipelines are retried after failures, rerun after a fix and backfilled over old dates, so a job that is not idempotent will sooner or later corrupt its own output.
+
+The usual failure is a blind append. The job reads a day of input and runs `INSERT INTO target SELECT ...`. It fails halfway, the scheduler retries it, and part of that day is now in the table twice.
+
+Two write patterns make a load safe to repeat:
+
+- **Overwrite the partition.** The job owns one slice of the target, usually a day. Each run replaces the whole slice: delete then insert in one transaction, or an atomic partition overwrite in a lake table format. Whatever was there before, the slice ends up equal to the input.
+- **Merge on a key.** `MERGE` or upsert on the business key, so a row that is seen again updates itself instead of being added.
+
+Idempotency also needs deterministic input. A job that filters on `now()` or `current_date` processes different data when it is rerun tomorrow. Pass the data interval in as a parameter (in Airflow, `data_interval_start` and `data_interval_end`) and derive every filter and every output partition from it.
+
+A backfill is then nothing special: the same job, run for a range of past intervals. In practice:
+
+- Keep raw data immutable, so there is something to replay from.
+- Run backfills in their own pool or queue with limited concurrency, so they do not starve the daily runs.
+- Rebuild downstream tables for the same intervals, in dependency order.
+- Reconcile counts against the source when it finishes.
+'''
+
+asked = [
+  "A job failed halfway through and was retried. How do you make sure the table is still right?",
+  "We found a bug in a transformation that has been running for 90 days. How do you fix the data?",
+  "What does idempotent mean for a pipeline?",
+]
+
+answer = [
+  "Define it: a rerun leaves the same table.",
+  "Give the two write patterns, overwrite by partition or merge on a key, and rule out blind appends.",
+  "Parameterise the job by its data interval, never by the wall clock.",
+  "Describe a backfill as the same job over past intervals, in its own pool, reading immutable raw data.",
+  "Finish with a reconciliation against the source.",
+]
+
+[[probes]]
+q = "Delete then insert: what if the job dies between the two?"
+a = "Run both in one transaction, or use an atomic overwrite or partition swap, so readers see either the old slice or the new one. Without that, a failure leaves an empty partition, which is at least visible and is repaired by the retry."
+
+[[probes]]
+q = "How do you backfill 90 days without disturbing the daily jobs?"
+a = "Use a separate pool or queue with capped concurrency, and write partition by partition so a failure resumes where it stopped. Rebuild downstream tables after their inputs, and reconcile at the end."
+
+[[probes]]
+q = "Is MERGE always idempotent?"
+a = "Only when the key is unique in the incoming batch and the update is a plain assignment. A merge that adds to a running total, or a batch with duplicate keys, gives a different result on the second run."
+
+[[examples]]
+title = "The same day loaded twice, with two write patterns"
+setup = '''
+CREATE TABLE staging (sale_id INTEGER, sale_date DATE, amount INTEGER);
+INSERT INTO staging VALUES (1, '2026-03-01', 40), (2, '2026-03-01', 60), (3, '2026-03-01', 25);
+CREATE TABLE sales_append (sale_id INTEGER, sale_date DATE, amount INTEGER);
+CREATE TABLE sales_overwrite (sale_id INTEGER, sale_date DATE, amount INTEGER);
+
+-- first run
+INSERT INTO sales_append SELECT * FROM staging;
+DELETE FROM sales_overwrite WHERE sale_date = DATE '2026-03-01';
+INSERT INTO sales_overwrite SELECT * FROM staging;
+
+-- the retry: exactly the same statements again
+INSERT INTO sales_append SELECT * FROM staging;
+DELETE FROM sales_overwrite WHERE sale_date = DATE '2026-03-01';
+INSERT INTO sales_overwrite SELECT * FROM staging;
+'''
+code = '''
+SELECT 'blind append' AS write_pattern, COUNT(*) AS row_count, SUM(amount) AS total
+FROM sales_append
+UNION ALL
+SELECT 'delete, then insert the day', COUNT(*), SUM(amount)
+FROM sales_overwrite
+ORDER BY write_pattern
+'''
+note = "The setup ran each load twice. The appended table has six rows and 250; the overwritten one still has three rows and 125."

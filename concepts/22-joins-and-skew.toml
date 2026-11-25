@@ -1,0 +1,67 @@
+title = "Join strategies and skew"
+area = "Performance at scale"
+level = "advanced"
+summary = "How an engine brings matching keys together decides what a join costs, and one hot key can make a single task carry most of the work."
+drills = ["fanout-join-sum"]
+experiment = "shrink"
+
+idea = '''
+A join has to bring rows with the same key together. How the engine does that decides the cost.
+
+- **Hash join.** Build a hash table on the smaller side and probe it with the larger. The usual choice for equality joins.
+- **Sort-merge join.** Sort both sides on the key and walk them together. Spark uses it for two large tables, because it copes with data that does not fit in memory.
+- **Broadcast join.** On a cluster, send a copy of the small side to every worker, so the large side never moves. It only works when the small side fits comfortably in memory.
+
+On one machine a hash join is usually cheap. On a cluster the expensive part is the **shuffle**: repartitioning both sides by key across the network so that matching rows land on the same worker. Much of join tuning is avoiding or shrinking that shuffle. Broadcast the small side, filter and project each side before the join, or store both tables bucketed or distributed on the join key.
+
+**Skew** is the common failure. If one key holds a large share of the rows (a NULL, a default customer, one very large account), every row with that key goes to the same task. That task runs long after the others finish, or runs out of memory. The fixes, in order:
+
+- Handle the hot key separately, then union the results.
+- Let the engine split skewed partitions. Adaptive query execution in Spark 3 does this for sort-merge joins.
+- Salt the key: add a random bucket number on the large side and replicate the small side once per bucket.
+
+"Aggregate before the join" is advice about shuffles, and it depends on the sizes. The measurement below is a case where it was slower on one machine. Separately from speed, when two child tables fan out, aggregating first is what makes the result correct.
+'''
+
+asked = [
+  "One task in this Spark job takes twenty times longer than the rest. What is going on?",
+  "When would you use a broadcast join, and when not?",
+  "Should you aggregate before or after a join?",
+]
+
+answer = [
+  "Name the join strategies and what each one costs.",
+  "On a cluster, identify the shuffle as the main cost and say how to avoid or shrink it.",
+  "Diagnose skew from evidence: task durations and shuffle read sizes per task, and the key distribution.",
+  "Offer fixes in order: isolate the hot key, adaptive skew handling, salting.",
+  "Say that aggregating first depends on row counts and group counts, and that you would measure it.",
+]
+
+[[probes]]
+q = "When does salting not help?"
+a = "When the aggregate cannot be finished in two stages without extra work, such as an exact distinct count or a median. Salting also adds a second aggregation stage and multiplies the small side, so it only pays when the skew is severe."
+
+[[probes]]
+q = "Why can a broadcast join fail?"
+a = "The broadcast side must fit in memory on the driver and on every executor. If its size was estimated wrongly, because statistics are stale or a filter was less selective than expected, the job runs out of memory."
+
+[[probes]]
+q = "The join key has many NULLs. Is that a skew problem?"
+a = "In an inner join NULL keys never match, so filter them out before the join. In an outer join they must be kept and can all land in one partition, so process them separately and union them back."
+
+[[examples]]
+title = "Finding the hot key before the join does"
+setup = '''
+CREATE TABLE events (event_id INTEGER, user_id INTEGER);
+INSERT INTO events VALUES (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 17), (7, 23), (8, 42);
+'''
+code = '''
+SELECT
+  user_id,
+  COUNT(*) AS row_count,
+  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS percent_of_rows
+FROM events
+GROUP BY user_id
+ORDER BY row_count DESC, user_id
+'''
+note = "User 0, a default id, holds 62.5 percent of the rows. In a shuffled join all of them go to one task. Run this distribution on the real key before you blame the cluster."

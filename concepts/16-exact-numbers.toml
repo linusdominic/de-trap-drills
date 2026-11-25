@@ -1,0 +1,89 @@
+title = "Exact numbers: floats, money, percentiles and ties"
+area = "Python"
+level = "core"
+summary = "Binary floats cannot hold most decimal fractions, percentiles have several definitions, and ranks need a rule for ties. State each choice."
+drills = ["reconcile-float-money", "slowest-endpoints-p95", "second-highest-ties"]
+
+idea = '''
+Three places where two correct-looking programs print different numbers.
+
+**Floats.** A `float` is a binary fraction. 0.1, 0.2 and 0.3 have no exact binary form, so `0.1 + 0.2 == 0.3` is false, and a sum of floats depends on the order of addition. That is fine for measurements. It is not fine for money, where "the same to the cent" must be a yes or a no.
+
+For money, use one of two representations:
+
+- **Integer minor units.** Store 1999 cents, not 19.99. Arithmetic is exact and comparison is `==`.
+- **`Decimal`**, built from a string. `Decimal("0.1")` is exact. `Decimal(0.1)` copies the float's error.
+
+In SQL the same rule is: `DECIMAL` or `NUMERIC` for money, never `FLOAT` or `DOUBLE`.
+
+**Rounding.** Python's `round` rounds halves to the nearest even digit, so `round(2.5)` is 2, and it rounds the binary value, so `round(2.675, 2)` is 2.67. If the rule is "half up", say so in code: `Decimal.quantize` with `ROUND_HALF_UP`. Agree the rule with whoever owns the numbers.
+
+When you do compare floats, compare with a tolerance (`math.isclose`), and never use a tolerance to compare money.
+
+**Percentiles.** There is no single definition of the 95th percentile. Nearest-rank takes an actual value from the data. Interpolating methods return a value between two data points, and there are several of them. On a small sample they give visibly different answers. Name the definition you use, and expect a monitoring tool to use another.
+
+**Ties.** "The second highest" is ambiguous when values repeat: the second row, or the second distinct value? Collect distinct values in a `set` for the second meaning. When sorting, make the tie-break part of the key, such as `key=lambda r: (-r.amount, r.name)`, so that the order does not depend on the order of the input.
+'''
+
+asked = [
+  "Reconcile these two lists of transactions and report the amounts that differ.",
+  "The p95 latency per endpoint.",
+  "The second-highest salary in each department.",
+  "Why would you not store a price in a float column?",
+]
+
+answer = [
+  "Compare money as integer cents or `Decimal`, not as floats.",
+  "Build `Decimal` values from strings, and name the rounding rule.",
+  "State the percentile definition, and that tools disagree on small samples.",
+  "Ask what a tie means before ranking, and make the tie-break explicit in the sort key.",
+  "Use a tolerance only for measured quantities, and say what tolerance and why.",
+]
+
+[[probes]]
+q = "Why does 0.1 + 0.2 print 0.30000000000000004?"
+a = "Neither 0.1 nor 0.2 can be written exactly in binary, so each is stored as the nearest representable value, and the sum of those two is not the nearest value to 0.3. The digits printed are the shortest that identify the stored number."
+
+[[probes]]
+q = "Is rounding both sides to two decimals a safe way to compare money?"
+a = "It works for values that are within float error of a whole cent, which exported amounts usually are. It is still a patch: convert to integer cents once, at the edge, and keep them as integers from then on."
+
+[[probes]]
+q = "Your p95 differs from the dashboard's. Which is wrong?"
+a = "Possibly neither. If one uses nearest-rank and the other interpolates, or the dashboard computes from pre-aggregated buckets or a sketch, the numbers differ, most on small samples. Compare the definitions before the code."
+
+[[probes]]
+q = "You sorted by amount descending. Two rows have the same amount. Which comes first?"
+a = "Python's sort is stable, so they keep their input order, which means the result depends on how the input happened to be ordered. Add a second key so that the output is the same for any input order."
+
+[[examples]]
+title = "Floats, Decimal, cents and rounding"
+kind = "python"
+code = '''
+from decimal import ROUND_HALF_UP, Decimal
+
+print("0.1 + 0.2 == 0.3:", 0.1 + 0.2 == 0.3, "->", 0.1 + 0.2)
+print("Decimal from strings:", Decimal("0.1") + Decimal("0.2") == Decimal("0.3"))
+print("Decimal from a float:", Decimal(0.1))
+print("integer cents:", 10 + 20 == 30)
+print("round(2.675, 2):", round(2.675, 2))
+print("round(0.5), round(1.5), round(2.5):", round(0.5), round(1.5), round(2.5))
+print("half up, to the cent:", Decimal("2.675").quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+'''
+note = "`Decimal(0.1)` shows the value the float really holds. `round(2.675, 2)` gives 2.67 because the stored number is slightly below 2.675, and the three halves round to 0, 2 and 2."
+
+[[examples]]
+title = "One sample, three 95th percentiles"
+kind = "python"
+code = '''
+import math
+import statistics
+
+latencies = [12, 15, 18, 20, 22, 25, 30, 45, 80, 200]
+
+rank = math.ceil(0.95 * len(latencies))
+print("nearest rank:", sorted(latencies)[rank - 1])
+print("interpolated, inclusive:", statistics.quantiles(latencies, n=100, method="inclusive")[94])
+print("interpolated, exclusive:", statistics.quantiles(latencies, n=100, method="exclusive")[94])
+'''
+note = "Ten values, three answers, and the exclusive method returns a value larger than anything in the data. All three are the 95th percentile under some definition, which is why the definition belongs in the question."

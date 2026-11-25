@@ -79,9 +79,14 @@ def run_answer(drill: Drill, answer: str, normalise: bool = True) -> Table:
 
 def dataset(drill: Drill) -> list[tuple[str, Table]]:
     """The tables the drill's setup creates, in creation order, as display text."""
+    return tables_of(drill.setup)
+
+
+def tables_of(setup: str) -> list[tuple[str, Table]]:
+    """The tables a setup script creates, in creation order, as display text."""
     con = duckdb.connect(":memory:")
     try:
-        con.execute(drill.setup)
+        con.execute(setup)
         names = [
             str(row[0])
             for row in con.execute("SELECT table_name FROM duckdb_tables() ORDER BY table_oid").fetchall()

@@ -1,0 +1,58 @@
+title = "Partitions after a GROUP BY"
+family = "Partitions"
+pattern = "Shuffle partitions"
+obvious = "200"
+question = "How many partitions does `per_key` have?"
+
+prompt = '''
+A small table of 100,000 rows is grouped by a key with 50 values. `spark.sql.shuffle.partitions` has its default value of 200, and nothing else was configured.
+'''
+
+code = '''
+events = spark.range(100_000).withColumn("key", F.col("id") % 50)
+
+per_key = events.groupBy("key").count()
+'''
+
+measure = '''
+print("spark.sql.shuffle.partitions =", spark.conf.get("spark.sql.shuffle.partitions"))
+print("spark.sql.adaptive.enabled   =", spark.conf.get("spark.sql.adaptive.enabled"))
+found = per_key.rdd.getNumPartitions()
+print(f"per_key has {found} partition(s)")
+spark.conf.set("spark.sql.adaptive.enabled", "false")
+off = spark.range(100_000).withColumn("key", F.col("id") % 50).groupBy("key").count().rdd.getNumPartitions()
+print(f"with adaptive query execution off: {off} partitions")
+answer(found)
+'''
+
+trap = '''
+The setting says 200, and before Spark 3.2 the answer was 200: fifty tiny partitions with data and 150 empty ones, each a task to schedule and, on a write, a file.
+
+Adaptive query execution (AQE) is on by default since Spark 3.2. It runs the shuffle, looks at the real sizes, and merges small neighbouring shuffle partitions up to an advisory size. For a small result that leaves one. 200 is now the *starting* number of shuffle partitions, not the number you get.
+
+So "set `spark.sql.shuffle.partitions`" is no longer a complete answer to "how many partitions will this have". Say which Spark version, and whether AQE is on.
+'''
+
+scale = '''
+AQE merges partitions that are too small. It does not split one that is too large unless the skew-join handling applies, so on a big shuffle the starting number still matters: too low and each partition spills to disk. Set it high enough for the largest stage and let AQE merge downwards, and read the final plan (`AdaptiveSparkPlan isFinalPlan=true`) or the stage's task count to see what happened.
+'''
+
+[[options]]
+value = "200"
+text = "200: the value of `spark.sql.shuffle.partitions`"
+why = "That is where the shuffle starts. With adaptive query execution on, small shuffle partitions are merged after the shuffle runs."
+
+[[options]]
+value = "50"
+text = "50: one per key"
+why = "Partitions are not allocated per key. Keys are hashed into the shuffle partitions, and then small partitions are merged."
+
+[[options]]
+value = "1"
+text = "1: the small shuffle partitions were merged"
+why = "Adaptive query execution measured the shuffle output and merged the tiny partitions into one."
+
+[[options]]
+value = "4"
+text = "4: one per core"
+why = "Cores decide how many tasks run at once, not how many partitions a shuffle produces."

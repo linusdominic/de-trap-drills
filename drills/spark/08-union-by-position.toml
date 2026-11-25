@@ -1,0 +1,57 @@
+title = "Two months of orders"
+family = "Columns"
+pattern = "union and unionByName"
+obvious = "400"
+question = "What is `total`?"
+
+prompt = '''
+January's orders and February's orders come from two extracts. Someone added a discount column in a different place in the February file. The job stacks the two months and sums the amount.
+'''
+
+code = '''
+january = spark.createDataFrame([(1, 100, 5)], ["order_id", "amount", "discount"])
+february = spark.createDataFrame([(2, 7, 300)], ["order_id", "discount", "amount"])
+
+total = january.union(february).agg(F.sum("amount")).first()[0]
+'''
+
+measure = '''
+print("january.union(february):")
+january.union(february).show()
+print(f"sum(amount) with union       = {total}")
+by_name = january.unionByName(february).agg(F.sum("amount")).first()[0]
+print(f"sum(amount) with unionByName = {by_name}")
+answer(total)
+'''
+
+trap = '''
+`union` is SQL's `UNION ALL`: it matches columns by **position** and takes the names from the first DataFrame. February's second column is the discount, so its 7 lands under `amount` and its 300 under `discount`. The types match, so there is no error, and the total is 107 instead of 400.
+
+`unionByName` matches by name, and fails if a column is missing unless you pass `allowMissingColumns=True`, which fills the gap with NULL.
+
+This appears whenever inputs are produced separately: files from different days, a `select *` over a table whose column order changed, two branches of a job that selected columns in a different order.
+'''
+
+scale = '''
+At scale nobody looks at the rows, so the wrong total ships. Use `unionByName` by default, select an explicit column list at every input boundary, and add a reconciliation check on the total against the source. The same applies in SQL: `UNION ALL` is positional in every engine, and `UNION ALL BY NAME` exists only in some (DuckDB and Snowflake among them).
+'''
+
+[[options]]
+value = "400"
+text = "400: 100 from January and 300 from February"
+why = "That is what `unionByName` returns. `union` pairs the second column of each DataFrame, whatever it is called."
+
+[[options]]
+value = "107"
+text = "107: February's discount was added to January's amount"
+why = "`union` matches by position, so February's `discount` (7) is read as `amount`."
+
+[[options]]
+value = "error"
+text = "It fails: the column names do not match"
+why = "`union` never looks at the names of the second DataFrame. Only the number of columns and compatible types matter."
+
+[[options]]
+value = "100"
+text = "100: February's rows are dropped"
+why = "No rows are dropped. Both rows are in the result, with February's values under the wrong names."

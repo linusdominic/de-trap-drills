@@ -1,0 +1,41 @@
+title = "The design round"
+round = "Data system design"
+summary = "A vague prompt and 45 minutes. The concepts an interviewer probes, with drills for the parts that can be written as code."
+outcome = "You can drive a pipeline design from requirements to operations and go deep on reruns, duplicates, late data, schema change and data quality."
+
+[[stages]]
+title = "Drive the conversation"
+note = "How to spend the time, and the first trade-off you will be asked about."
+steps = ["c:the-design-round", "c:batch-and-streaming"]
+
+[[stages]]
+title = "Safe to run twice"
+note = "Retries, replays and backfills happen. A design is judged on what they do to the data."
+steps = [
+  "c:idempotency-and-backfills",
+  "c:delivery-guarantees",
+  "d:latest-by-key-late-arrival",
+  "c:change-data-capture",
+  "d:dedupe-latest",
+]
+
+[[stages]]
+title = "When the data changes shape, or is wrong"
+note = "Producers change schemas and sources disagree with targets. Plan for both."
+steps = [
+  "c:schema-evolution-and-contracts",
+  "d:flatten-json",
+  "c:data-quality-and-reconciliation",
+  "d:reconcile-null-and-missing",
+  "d:reconcile-float-money",
+]
+
+[[stages]]
+title = "Late data and storage"
+note = "Two deep dives that come up in most designs."
+steps = ["c:event-time-and-late-data", "c:table-formats-and-file-layout"]
+
+[[stages]]
+title = "Your own work"
+note = "The round usually ends with a project of yours. Prepare it like a design."
+steps = ["c:the-project-deep-dive"]

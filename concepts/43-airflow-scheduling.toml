@@ -1,0 +1,57 @@
+title = "Airflow scheduling: logical date, data interval and catch-up"
+area = "Airflow"
+level = "core"
+summary = "A DAG run is labelled with a logical date and a data interval, not with the time it starts. What they are depends on the timetable and the version."
+drills = ["daily-run-window", "catchup-default"]
+
+idea = '''
+Every DAG run carries three times, and none of them is "now".
+
+- **`logical_date`**: the label of the run. Airflow 2 also called it `execution_date`.
+- **`data_interval_start`** and **`data_interval_end`**: the period of data the run is meant to process.
+- **`run_after`**: the earliest moment the scheduler may start it.
+
+A **timetable** turns the `schedule` into these values, and there are two families.
+
+With a **data-interval timetable** (`CronDataIntervalTimetable`), a daily run covers one whole day and starts when that day is over. The run for 1 March has `logical_date` 1 March 00:00, an interval from 1 March to 2 March, and starts on 2 March at 00:00. This is how a cron schedule behaved in Airflow 2.
+
+With a **trigger timetable** (`CronTriggerTimetable`), a run fires at the cron time and its interval is empty: `data_interval_start`, `data_interval_end` and `logical_date` are all the moment it fires.
+
+Which one `schedule="@daily"` gives you depends on the version and the configuration. On a default Airflow 3 install (checked on 3.4.0), `[scheduler] create_cron_data_intervals` is `False`, so a cron string means the trigger timetable. A task that loads "from `data_interval_start` to `data_interval_end`" then loads nothing, and `{{ ds }}` is the day the run fires on, not the day before. To get intervals, set that option or pass the timetable yourself:
+
+```python
+from airflow.timetables.interval import CronDataIntervalTimetable
+
+schedule = CronDataIntervalTimetable("@daily", timezone="UTC")
+```
+
+**Catch-up** is the second default that changed. With `catchup=True` the scheduler creates a run for every schedule point since `start_date` that has none. Airflow 2 did that by default. In Airflow 3 `catchup_by_default` is `False`: a newly unpaused DAG gets only its latest run, and older periods need an explicit backfill.
+
+Keep `start_date` a fixed date. A value computed from the current time moves every time the file is parsed.
+'''
+
+asked = [
+  "A daily DAG has a start date of 1 March. When does its first run start, and which data should it process?",
+  "What is the difference between the logical date and the time a task runs?",
+  "You unpause a DAG whose start date is a month ago. How many runs are created?",
+]
+
+answer = [
+  "Name the three times on a run, and say that none of them is the wall clock.",
+  "Explain the interval model: a run is named after the start of its interval and starts when the interval ends.",
+  "Say that Airflow 3 defaults differ: a cron string gives a trigger timetable with an empty interval, and catch-up is off.",
+  "Say you would check the version, the config and one run's rendered dates before relying on either.",
+  "Keep `start_date` fixed, and fill old periods with an explicit backfill.",
+]
+
+[[probes]]
+q = "A DAG migrated from Airflow 2 to Airflow 3 runs every day and loads nothing. Why?"
+a = "With the Airflow 3 default, a cron schedule creates runs whose data interval has zero length, so a query between `data_interval_start` and `data_interval_end` selects no rows. Set `create_cron_data_intervals` to true or use `CronDataIntervalTimetable`, then check the rendered dates of one run."
+
+[[probes]]
+q = "Why does an interval-based run for Monday start on Tuesday?"
+a = "Because Monday's data is complete only when Monday is over. The run is named after the start of its interval and scheduled at the end of it."
+
+[[probes]]
+q = "What happens to missed runs when catchup is false?"
+a = "The scheduler creates only the most recent run and skips the earlier schedule points. Nothing fills them in later. If those periods matter, run a backfill for the date range."

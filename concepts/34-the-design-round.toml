@@ -1,0 +1,50 @@
+title = "The design round"
+area = "The interview"
+level = "core"
+summary = "How to spend 45 minutes on a vague pipeline prompt: requirements first, an end-to-end sketch, two deep dives, then operations and trade-offs."
+
+idea = '''
+A design round gives you a vague prompt, such as "design real-time analytics for a ride-sharing app", and 45 to 60 minutes. You are expected to drive. A plan for the time stops you from spending half of it on one box.
+
+1. **Requirements (5 to 8 minutes).** Who uses the output, and for what decision? How fresh must it be? How much data: events per second, size per day, history to keep? Must numbers be exact, or is approximate acceptable? Any limits on cost, privacy or data residency? Write the answers down. They justify every later choice.
+2. **Sources and contracts (about 3 minutes).** Event streams, database changes, third-party APIs, files. Who owns each schema and how changes are announced.
+3. **High-level design (about 10 minutes).** Draw ingestion, raw storage, processing and serving from left to right. Give each box its role first and a tool second.
+4. **Deep dives (15 to 20 minutes).** Choose the two hardest parts of this problem and go deep: late data, exactly-once, backfills, schema changes, hot keys. If the interviewer steers, follow.
+5. **Operations (about 5 minutes).** Data quality checks, monitoring, alerting, on-call, cost, rollout.
+6. **Trade-offs (about 3 minutes).** What you would simplify for a first version, and what you would revisit as volume grows.
+
+What is being scored:
+
+- Whether you asked before you designed, and whether the design follows from the answers.
+- Whether each component has a reason, and you can say what you gave up by choosing it.
+- Whether you found the hard parts yourself.
+- Whether the system can be operated: rerun, backfilled, monitored, paid for.
+
+Two habits help. Keep raw data immutable in every design, because that is what makes replays, backfills and audits possible. And state numbers, even rough ones, since volume and freshness decide between otherwise equal options.
+'''
+
+asked = [
+  "Design a pipeline for real-time ride analytics, with exact daily revenue for finance.",
+  "Design the ingestion of 20 third-party APIs into one model.",
+  "You have 45 minutes. Where do you start?",
+]
+
+answer = [
+  "Spend the first minutes on requirements: users, freshness, volume, correctness, constraints.",
+  "Draw the end-to-end flow before detailing any part of it.",
+  "Pick the two hardest problems and go deep on them without being asked.",
+  "Cover operations: quality checks, monitoring, backfills, cost.",
+  "Close with the trade-offs and a simpler first version.",
+]
+
+[[probes]]
+q = "Why did you pick that tool?"
+a = "Answer with the role it plays and the property you need from it, then name one alternative and what would make you switch. Naming a tool without the requirement behind it is the weak answer."
+
+[[probes]]
+q = "What breaks first when the volume grows ten times?"
+a = "Walk the diagram and name the bottleneck of this design: a hot partition key, a sink with one writer, a join whose state no longer fits, a compaction backlog. Then say what you would change."
+
+[[probes]]
+q = "What would you cut for version one?"
+a = "Usually the streaming path, if a frequent batch meets the stated freshness, and any custom component that a managed service covers. Keep the raw landing zone and the reconciliation check."

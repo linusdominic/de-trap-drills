@@ -1,0 +1,55 @@
+title = "A global row number"
+family = "Partitions"
+pattern = "Window without PARTITION BY"
+obvious = "8"
+question = "How many partitions does the window run on?"
+
+prompt = '''
+A table of events needs a running sequence number across the whole table, ordered by time. The input has 8 partitions.
+'''
+
+code = '''
+events = spark.range(0, 1_000_000, numPartitions=8).withColumnRenamed("id", "ts")
+
+numbered = events.withColumn("n", F.row_number().over(Window.orderBy("ts")))
+'''
+
+measure = '''
+plan = plan_of(numbered)
+print("\n".join(line for line in plan.splitlines() if "Exchange" in line or "Window" in line))
+found = numbered.rdd.getNumPartitions()
+print(f"numbered has {found} partition(s)")
+answer(found)
+'''
+
+trap = '''
+A window with `ORDER BY` and no `PARTITION BY` is one window over the whole table. To number the rows in order, Spark has to bring every row to a single partition and sort it there. The plan shows it as `Exchange SinglePartition`, and Spark logs a warning that most people never read.
+
+On a small table this is harmless. On a large one it is a single task holding the whole dataset, which is the usual cause of "the job hangs on the last stage" and of executor out-of-memory errors.
+
+The same thing happens in SQL: `ROW_NUMBER() OVER (ORDER BY ts)`.
+'''
+
+scale = '''
+Ask what the number is for. If you need a unique id, `monotonically_increasing_id()` gives one without a shuffle (unique, not consecutive). If you need order within a group, add `PARTITION BY`. If you really need a dense global sequence, compute per-partition counts first and add each partition's offset, or use `zipWithIndex` on the RDD, which does that for you.
+'''
+
+[[options]]
+value = "8"
+text = "8: the window runs on each input partition"
+why = "A row number across the whole table needs every earlier row, so the rows cannot stay in 8 independent partitions."
+
+[[options]]
+value = "1"
+text = "1: every row is moved to a single partition"
+why = "With no `PARTITION BY`, the whole table is one window, and Spark moves it to one partition to sort and number it."
+
+[[options]]
+value = "200"
+text = "200: the shuffle partitions setting"
+why = "That applies to a hash shuffle on a key. With no partitioning key there is nothing to hash, so the exchange has a single partition."
+
+[[options]]
+value = "4"
+text = "4: one per core"
+why = "Cores do not set partition counts. This plan has a single-partition exchange."

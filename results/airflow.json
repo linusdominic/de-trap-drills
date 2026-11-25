@@ -1,0 +1,34 @@
+{
+ "date": "2026-11-26",
+ "engine": "Apache Airflow",
+ "version": "3.4.0",
+ "setup": "Airflow 3.4.0, a new SQLite metadata database, default configuration",
+ "python": "3.12.16",
+ "facts": {
+  "daily-run-window": {
+   "value": "0",
+   "output": "schedule='@daily' became: CronTriggerTimetable\nfirst run starts at  2026-03-01 00:00:00+00:00\ndata_interval_start  2026-03-01 00:00:00+00:00\ndata_interval_end    2026-03-01 00:00:00+00:00\nwindow: 0 hours\n\nthe same schedule as a CronDataIntervalTimetable (the Airflow 2 behaviour):\nfirst run starts at  2026-03-02 00:00:00+00:00\ndata_interval_start  2026-03-01 00:00:00+00:00\ndata_interval_end    2026-03-02 00:00:00+00:00",
+   "hash": "48b0fd5e150c"
+  },
+  "catchup-default": {
+   "value": "1",
+   "output": "catchup, as the scheduler sees it: False\nruns created at 2026-03-11T00:30:00Z: 1\n  logical dates: ['2026-03-11']\nwith catchup=True: 11\n  logical dates: 2026-03-01 to 2026-03-11",
+   "hash": "61fcae3ff52d"
+  },
+  "now-in-task": {
+   "value": "today",
+   "output": "the run's logical date:  2026-03-05\ntask state:              success\npartition written:       day=2026-11-26\nthe date this was run:   2026-11-26",
+   "hash": "3bc2e2aa6535"
+  },
+  "top-level-code": {
+   "value": "5",
+   "output": "after 5 parses of the DAG folder, with no run: load_table_list was called 5 times\nduring one run of its 3 tasks: called 2 more times",
+   "hash": "135040a3d2e1"
+  },
+  "branch-then-join": {
+   "value": "audit",
+   "output": "choose             success\nfull_load          success\nincremental_load   skipped\npublish            skipped\naudit              success",
+   "hash": "9ead6567c701"
+  }
+ }
+}

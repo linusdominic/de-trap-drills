@@ -1,0 +1,29 @@
+title = "The Airflow round"
+round = "Airflow"
+summary = "Predict what Airflow does with a DAG: when it runs, what window it covers, what a rerun writes, which tasks are skipped. Every answer was recorded from a real run."
+outcome = "You can explain logical dates and data intervals for the version in front of you, write tasks that are safe to rerun, and say why a green run published nothing."
+
+[[stages]]
+title = "When a run happens"
+note = "Two defaults changed between Airflow 2 and Airflow 3. Both change what a daily DAG loads."
+steps = ["c:airflow-scheduling", "d:daily-run-window", "d:catchup-default"]
+
+[[stages]]
+title = "Safe to rerun"
+note = "Retries, clears and backfills run the same task again. It must do the same thing."
+steps = ["c:airflow-idempotent-tasks", "d:now-in-task"]
+
+[[stages]]
+title = "The DAG file and the graph"
+note = "What runs when the file is parsed, and what a skipped task does to the tasks after it."
+steps = [
+  "c:airflow-dag-parsing",
+  "d:top-level-code",
+  "c:airflow-trigger-rules",
+  "d:branch-then-join",
+]
+
+[[stages]]
+title = "Running it for real"
+note = "What a lead is asked about operating Airflow, beyond writing DAGs."
+steps = ["c:airflow-in-production"]

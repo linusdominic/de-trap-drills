@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trap Drills: data engineering drills where the obvious answer fails</title>
-  <meta name="description" content="SQL and Python drills for data engineers. Every dataset has a trap planted in it, and your answer is checked by running it in your browser.">
+  <title>Trap Drills: interview prep for data engineers, on data where the obvious answer fails</title>
+  <meta name="description" content="Learning paths for each round of a data engineering interview: concept pages with examples that are run, and SQL, Python, Spark and Airflow drills where the obvious answer is wrong. Everything runs in your browser.">
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e8590c'/%3E%3Cpath d='M8 10h16l-8 13z' fill='%23fff'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=20261126a">
+  <link rel="stylesheet" href="styles.css?v=20261126c">
   <script>
     try {
       var saved = localStorage.getItem("trapdrills:theme");
@@ -23,21 +23,32 @@
       <span>Trap Drills</span>
     </a>
     <nav class="top-nav" aria-label="Site">
-      <a href="#/" data-nav="home">Drills</a>
+      <a href="#/" data-nav="home">Paths</a>
+      <a href="#/concepts" data-nav="concepts">Concepts</a>
+      <a href="#/drills" data-nav="drills">Drills</a>
       <a href="#/scale" data-nav="scale">Scale</a>
-      <a href="https://github.com/linusdominic/de-trap-drills" rel="noopener">GitHub</a>
+      <a href="#/mock" data-nav="mock">Mock round</a>
     </nav>
     <div class="top-right">
-      <span class="progress" id="progress" aria-live="polite"></span>
+      <button class="search" id="search" type="button" aria-label="Search drills, concepts and paths">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.5 10.5L14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Search</span><kbd>⌘K</kbd>
+      </button>
+      <a class="progress" id="progress" href="#/drills" aria-label="Your progress"></a>
+      <a class="icon-button" href="https://github.com/linusdominic/de-trap-drills" rel="noopener" aria-label="The repository on GitHub">
+        <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.5 15.6c.4.1.5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.100 1.2.800 1.2.800.7 1.2 1.9.900 2.3.700.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4a3.1 3.1 0 0 1 .8-2.100c-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.800a7.6 7.6 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.200 1.9.100 2.1.500.6.800 1.3.800 2.1 0 3.1-1.9 3.7-3.7 3.9.300.3.600.8.600 1.500v2.200c0 .2.1.500.6.400A8 8 0 0 0 8 .2Z"/></svg>
+      </a>
       <button class="icon-button" id="theme" type="button" aria-label="Switch between light and dark">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 16V5a7 7 0 0 1 0 14Z"/></svg>
       </button>
     </div>
   </header>
-  <div class="shell">
-    <nav class="rail" id="rail" aria-label="All drills"></nav>
-    <main id="main" tabindex="-1"><p class="loading">Loading drills ...</p></main>
-  </div>
-  <script type="module" src="app.js?v=20261126a"></script>
+  <main id="main" tabindex="-1"><p class="loading">Loading ...</p></main>
+  <dialog class="palette" id="palette" aria-label="Search">
+    <input id="palette-input" type="text" placeholder="Search drills, concepts and paths" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+    <ul id="palette-list" role="listbox" aria-label="Results"></ul>
+    <p class="palette-foot"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>↵</kbd> open · <kbd>Esc</kbd> close</p>
+  </dialog>
+  <script type="module" src="app.js?v=20261126c"></script>
 </body>
 </html>

@@ -1,0 +1,99 @@
+title = "Data quality and reconciliation"
+area = "Pipeline design"
+level = "advanced"
+summary = "Decide where to check, which failures stop the pipeline, and how to prove that the warehouse still agrees with the source."
+drills = ["reconcile-null-and-missing", "reconcile-float-money", "csv-quoted-commas"]
+
+idea = '''
+Data quality work is deciding where to check, what to check, and what happens when a check fails.
+
+Check at three points:
+
+- **On arrival.** Is the batch what you expected: the schema, a row count in the normal range, required fields present, values that parse? Bad input is cheapest to stop here.
+- **After transformation.** Do the tables you built keep their promises: unique keys, non-null keys, foreign keys that resolve, values from an accepted set, business rules such as a paid amount that does not exceed the invoice?
+- **Against the source.** Does the warehouse still agree with the system of record? This is reconciliation, and it is the only check that catches rows lost or changed on the way.
+
+Decide the severity of each check in advance. A broken key, or a failed reconciliation on a financial table, should **block**: stop the pipeline before the bad data is published. An unusual but possible volume should **warn**. Checks that always warn are ignored within weeks, and checks that block on noise get switched off.
+
+Bad rows need somewhere to go. A **quarantine** table holds rejected rows with the reason and the batch, so the good rows continue and someone can fix and replay the rest.
+
+Reconcile from cheap to expensive:
+
+1. Row counts per partition.
+2. Sums of the important numeric columns, and a checksum over all compared columns.
+3. A row-by-row comparison, only for the partitions where step 1 or 2 disagrees.
+
+Compare with a NULL-safe operator (`IS DISTINCT FROM`), in both directions (a full outer join, so an extra row on either side shows up), and with exact types for money. Then test the check itself: plant a missing row, an extra row and a changed value, and confirm that it reports all three.
+'''
+
+asked = [
+  "How do you guarantee data quality in a pipeline?",
+  "How would you prove that the warehouse table matches the source system?",
+  "A check fails at 3 a.m. Does the pipeline stop?",
+]
+
+answer = [
+  "Place checks on arrival, after transformation and against the source.",
+  "Separate blocking checks from warnings, with a reason for each.",
+  "Quarantine bad rows with the reason, so good rows can continue.",
+  "Reconcile in layers: counts, then sums and checksums, then rows only where those differ.",
+  "Make the comparison NULL-safe and two-directional, and test it with planted differences.",
+]
+
+[[probes]]
+q = "The counts match. Are the tables equal?"
+a = "No. A lost row and a duplicated row cancel out in a count, and a changed value does not affect it at all. Add sums or a checksum of the compared columns per partition."
+
+[[probes]]
+q = "The source keeps changing while you compare. How do you reconcile?"
+a = "Compare at a consistent cut: rows up to a fixed timestamp or log position on both sides, or a closed period such as yesterday. Otherwise changes in flight show up as false differences."
+
+[[probes]]
+q = "Who gets the alert?"
+a = "The owner of the failing data, with the check, the partition and a sample of the offending rows in the message. A blocking failure also needs a runbook: how to inspect the quarantine, fix the rows and replay them."
+
+[[examples]]
+title = "Counts and totals agree, and the tables still differ"
+setup = '''
+CREATE TABLE src_payments (payment_id INTEGER, pay_date DATE, amount INTEGER, status VARCHAR);
+INSERT INTO src_payments VALUES
+  (1, '2026-03-01', 100, 'paid'),
+  (2, '2026-03-01', 50, 'paid'),
+  (3, '2026-03-02', 70, NULL),
+  (4, '2026-03-02', 30, 'paid'),
+  (5, '2026-03-03', 20, 'paid');
+CREATE TABLE wh_payments (payment_id INTEGER, pay_date DATE, amount INTEGER, status VARCHAR);
+INSERT INTO wh_payments VALUES
+  (1, '2026-03-01', 100, 'paid'),
+  (2, '2026-03-01', 50, 'paid'),
+  (3, '2026-03-02', 70, 'paid'),
+  (4, '2026-03-02', 30, 'paid'),
+  (6, '2026-03-03', 20, 'paid');
+'''
+code = '''
+WITH compared AS (
+  SELECT
+    COALESCE(s.pay_date, w.pay_date) AS pay_date,
+    s.payment_id AS src_id,
+    w.payment_id AS wh_id,
+    s.amount AS src_amount,
+    w.amount AS wh_amount,
+    s.payment_id IS NULL
+      OR w.payment_id IS NULL
+      OR s.amount IS DISTINCT FROM w.amount
+      OR s.status IS DISTINCT FROM w.status AS differs
+  FROM src_payments AS s
+  FULL OUTER JOIN wh_payments AS w ON w.payment_id = s.payment_id
+)
+SELECT
+  pay_date,
+  COUNT(src_id) AS src_rows,
+  COUNT(wh_id) AS wh_rows,
+  SUM(src_amount) AS src_total,
+  SUM(wh_amount) AS wh_total,
+  COUNT(*) FILTER (WHERE differs) AS rows_that_differ
+FROM compared
+GROUP BY pay_date
+ORDER BY pay_date
+'''
+note = "Row counts and totals match on all three days. Only the comparison over every column finds the status that differs on 2 March and the payment that was swapped for another on 3 March. This is why step 2 needs a checksum and not only a sum."

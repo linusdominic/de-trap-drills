@@ -1,0 +1,82 @@
+title = "Change data capture"
+area = "Pipeline design"
+level = "advanced"
+summary = "Copy changes out of an operational database by reading its log, and apply them in log order, deletes included."
+drills = ["dedupe-latest", "scd2-load-null-change"]
+
+idea = '''
+Change data capture (CDC) copies changes from an operational database to the warehouse or lake without running heavy queries on the source.
+
+There are two ways to find the changes:
+
+- **Polling** a column such as `updated_at`. It is simple, but it misses hard deletes and intermediate states between two polls, depends on every writer maintaining the column, and puts query load on the source.
+- **Log-based capture.** A tool such as Debezium or AWS DMS reads the database's own transaction log (the write-ahead log in PostgreSQL, the binlog in MySQL). It sees every insert, update and delete in commit order, with little load on the source.
+
+A log-based pipeline has two phases: an **initial snapshot** of each table, then the stream of **changes** from the log position at which the snapshot was taken. Each change record carries the operation, the row values and its position in the log.
+
+Applying the changes is where the mistakes happen:
+
+- **Order by log position, not by timestamp.** Two updates in the same millisecond, or two servers whose clocks disagree, make timestamps ambiguous. The log sequence number (the LSN in PostgreSQL) is the true order.
+- **Deletes are data.** A delete arrives as a record with an operation flag. Apply it as a soft delete or a real delete. Ignoring it leaves rows in the warehouse that no longer exist.
+- **Reduce, then apply.** For a current-state table, keep the last change per key in the batch and `MERGE` it. For history, append every change or build a Type 2 dimension.
+- **Expect duplicates.** Delivery is at-least-once, so the apply step must be idempotent.
+- **Schema changes** arrive in the middle of the stream, and need a policy before they happen.
+'''
+
+asked = [
+  "Replicate a Postgres database into the warehouse every 15 minutes without loading production. How?",
+  "Why read the log instead of querying on `updated_at`?",
+  "How do deletes reach the warehouse?",
+]
+
+answer = [
+  "Choose log-based capture and say what polling misses: deletes, intermediate states, load on the source.",
+  "Describe the two phases: a snapshot, then changes from the snapshot's log position.",
+  "Order changes by log position and apply the last one per key with an idempotent merge.",
+  "Handle deletes explicitly, as a soft-delete flag or a removal.",
+  "Cover operations: schema changes, replication lag, and a reconciliation against the source.",
+]
+
+[[probes]]
+q = "Why not order by `updated_at`?"
+a = "It is set by the application or a trigger, it can be equal for two changes, and clocks on different servers disagree. The log position is assigned by the database in commit order and is unique."
+
+[[probes]]
+q = "What risk does log-based CDC put on the source?"
+a = "The database keeps its log until the reader has consumed it. In PostgreSQL a stalled or abandoned replication slot makes the write-ahead log grow until the disk fills, so monitor the slot's lag and alert on it."
+
+[[probes]]
+q = "How do you know the copy is complete?"
+a = "Reconcile it: row counts and checksums per table or per key range against the source, at a consistent point, on a schedule. CDC pipelines can fall behind or drop changes quietly, so the check has to be independent of the pipeline."
+
+[[examples]]
+title = "The last change per key: log position against timestamp"
+setup = '''
+CREATE TABLE changes (lsn INTEGER, op VARCHAR, account_id INTEGER, status VARCHAR, updated_at TIMESTAMP);
+INSERT INTO changes VALUES
+  (101, 'insert', 1, 'open', '2026-03-01 10:00:00'),
+  (102, 'insert', 2, 'open', '2026-03-01 10:00:05'),
+  (103, 'update', 1, 'frozen', '2026-03-01 10:00:07'),
+  (104, 'update', 1, 'open', '2026-03-01 10:00:06'),
+  (105, 'delete', 2, NULL, '2026-03-01 10:00:09'),
+  (106, 'insert', 3, 'open', '2026-03-01 10:00:10');
+'''
+code = '''
+WITH ranked AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY lsn DESC) AS by_log,
+    ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY updated_at DESC) AS by_time
+  FROM changes
+)
+SELECT
+  l.account_id,
+  l.op AS last_operation,
+  l.status AS status_by_log_position,
+  t.status AS status_by_timestamp
+FROM ranked AS l
+JOIN ranked AS t ON t.account_id = l.account_id AND t.by_time = 1
+WHERE l.by_log = 1
+ORDER BY l.account_id
+'''
+note = "Account 1 was frozen and then reopened. The reopening was stamped by a server whose clock ran a second behind, so ordering by timestamp leaves the account frozen. Account 2 ends with a delete, which must remove the row or flag it."

@@ -1,0 +1,50 @@
+title = "Batch and streaming"
+area = "Pipeline design"
+level = "advanced"
+summary = "Choose by how fresh the output must be and what that freshness costs, and stream only the part that needs it."
+drills = ["tumbling-windows-timezones"]
+
+idea = '''
+Batch processes a bounded set of data on a schedule. Streaming processes events continuously as they arrive. The choice is about how fresh the output must be, and what you pay for that freshness.
+
+Start from the requirement, not from the tool. Ask who uses the output and what they would do differently if it were one minute old instead of one hour or one day old. Fraud blocking and live operations need seconds. Most reporting, finance and model training do not.
+
+Streaming costs more, in ways worth saying out loud. It runs all the time. State has to be managed and recovered. Late and out-of-order events need explicit handling. A replay is harder than a rerun, and the on-call load is higher. So stream only the part that needs it.
+
+Common shapes:
+
+- **Batch only.** Hourly or daily jobs. The default when the freshness allows it.
+- **Micro-batch.** Small batches every minute or every few minutes, as in Spark Structured Streaming's default mode or a frequent incremental job. Much of the freshness for much less complexity.
+- **A fast path and a corrected path.** A stream gives approximate numbers now. A batch job later recomputes the same period from the complete raw data, late events included, and becomes the number of record. This is often called a lambda architecture.
+- **Stream only.** One streaming codebase, with reprocessing done by replaying the log, often called kappa. It is simpler to reason about when the log keeps enough history.
+
+Whatever the shape, land the raw events in durable, immutable storage. The batch path, backfills and audits all read from it.
+
+Choose the serving store by access pattern: a warehouse for ad hoc analysis, a real-time OLAP store (Pinot, Druid, ClickHouse) for sub-second dashboards over fresh data, a key-value store for per-entity lookups from an application.
+'''
+
+asked = [
+  "Would you build this as batch or as streaming? Why?",
+  "Operations want live numbers and finance wants exact ones. How do you serve both?",
+  "The live dashboard and the daily report disagree. Is that a bug?",
+]
+
+answer = [
+  "Ask for the freshness requirement, and who acts on it, before choosing.",
+  "Name what streaming costs: always-on compute, state, late data, harder replays, on-call.",
+  "Stream the narrow part that needs it and batch the rest, with micro-batch as the middle ground.",
+  "Describe the fast path and the corrected path, and say which one is the number of record.",
+  "Pick the serving store from the query pattern.",
+]
+
+[[probes]]
+q = "Why can the live number and the daily number differ?"
+a = "The stream closes its windows before every late event has arrived, and may use approximations. The batch job sees the complete data. Tell stakeholders this up front and label the live figure as provisional."
+
+[[probes]]
+q = "What is the drawback of running both paths?"
+a = "Two codebases implement the same logic and will drift apart. Reduce it by sharing the transformation code or SQL, or by using one engine in both modes."
+
+[[probes]]
+q = "When is micro-batch not enough?"
+a = "When a decision has to be made per event within about a second, such as blocking a transaction, or when per-event state and timers matter. Then you need a true streaming engine."

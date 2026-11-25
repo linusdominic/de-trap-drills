@@ -1,0 +1,30 @@
+title = "Time and history"
+round = "SQL, senior"
+summary = "Boundaries, time zones, slowly changing dimensions and late data: the questions that separate senior answers from correct-looking ones."
+outcome = "You can filter a time range without losing its last day, join a fact to the value that was true at the time, and explain what late data does to a result."
+
+[[stages]]
+title = "Boundaries"
+note = "Where a day starts and where a range ends."
+steps = [
+  "c:half-open-intervals",
+  "d:between-timestamp-end",
+  "c:time-zones",
+  "d:local-day-boundary",
+  "d:tumbling-windows-timezones",
+]
+
+[[stages]]
+title = "What was true then"
+note = "The current value of an attribute is not the value it had when the event happened."
+steps = [
+  "c:slowly-changing-dimensions",
+  "d:scd2-as-of-join",
+  "d:scd2-load-null-change",
+  "c:point-in-time-joins",
+]
+
+[[stages]]
+title = "Data that arrives late"
+note = "The order rows arrive in is not the order things happened in."
+steps = ["c:event-time-and-late-data", "d:latest-by-key-late-arrival"]

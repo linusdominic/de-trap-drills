@@ -1,0 +1,81 @@
+title = "Half-open intervals"
+area = "Time and history"
+level = "core"
+summary = "Write every period as start included, end excluded. BETWEEN on a timestamp loses the last day or takes the first instant of the next."
+drills = ["between-timestamp-end", "sessionize-datediff"]
+
+idea = '''
+A period of time has a first instant and a first instant that is no longer in it. Write it that way:
+
+```sql
+WHERE paid_at >= TIMESTAMP '2026-04-01'
+  AND paid_at <  TIMESTAMP '2026-05-01'
+```
+
+This is a half-open interval. It is correct for dates, for timestamps and for any precision, and consecutive periods fit together exactly: the end of April is the start of May, with no instant in both and none in neither.
+
+`BETWEEN` is closed at both ends, and that fails on timestamps in two ways. `BETWEEN '2026-04-01' AND '2026-04-30'` stops at midnight at the start of 30 April and loses that day. Stretching it to `'2026-05-01'` includes an event at exactly midnight on 1 May, which then counts in both months. Ending at `23:59:59` leaves a hole for anything with fractional seconds.
+
+The same convention pays off elsewhere:
+
+- **Validity ranges.** With `valid_from` included and `valid_to` excluded, the next version starts exactly where the last one ends, and a lookup matches one version.
+- **Buckets and windows.** Every event falls in exactly one.
+- **Incremental loads.** "Everything from the last watermark up to, but not including, the new one" neither repeats nor skips a row.
+
+A related trap is measuring how long something took. In several engines, including SQL Server, Redshift, Snowflake and DuckDB, the date-difference function counts the unit boundaries crossed, not elapsed time: 23:59 to 00:01 the next day is "1 day". Subtract the two timestamps, or take the difference in the smallest unit you care about and compare that.
+
+Half-open ranges on the raw column are also what lets an engine skip data. A plain range can be checked against partition bounds and file statistics.
+'''
+
+asked = [
+  "Revenue for March.",
+  "How many events happened between these two timestamps?",
+  "Flag the trips that took more than one day.",
+  "How do you define valid_from and valid_to on a history table?",
+]
+
+answer = [
+  "Filter with `>=` the first instant and `<` the first instant of the next period.",
+  "Explain what `BETWEEN` does with a date literal against a timestamp column.",
+  "Say the convention out loud for any range you design: which end is included.",
+  "Measure durations by subtracting timestamps, and know that date-difference functions may count boundaries.",
+  "Mention that a plain range on the raw column lets the engine prune partitions and files.",
+]
+
+[[probes]]
+q = "The column is a DATE, not a timestamp. Is BETWEEN fine?"
+a = "For whole days it returns the right rows. The half-open form is still safer: it survives the day someone changes the column to a timestamp, and it reads the same for every period length."
+
+[[probes]]
+q = "Why not CAST(paid_at AS DATE) BETWEEN ... instead?"
+a = "It returns the right rows, but it wraps the filter column in a function. Some engines can no longer use partition bounds, statistics or an index on that column, and others rewrite it for you. A range on the raw column is correct and prunes everywhere."
+
+[[probes]]
+q = "Your history table uses an inclusive valid_to. What changes?"
+a = "The lookup becomes `BETWEEN valid_from AND valid_to`, and the next version must start one unit after the last one ends. That only works for whole days. With timestamps, one unit is not well defined, so use an exclusive end."
+
+[[examples]]
+title = "April, counted three ways"
+setup = '''
+CREATE TABLE logins (login_id INTEGER, login_at TIMESTAMP);
+INSERT INTO logins VALUES
+  (1, '2026-04-01 00:00:00'), (2, '2026-04-12 09:30:00'),
+  (3, '2026-04-30 00:00:00'), (4, '2026-04-30 21:10:05'),
+  (5, '2026-05-01 00:00:00'), (6, '2026-05-01 08:00:00');
+'''
+code = '''
+SELECT COUNT(CASE WHEN login_at BETWEEN TIMESTAMP '2026-04-01' AND TIMESTAMP '2026-04-30' THEN 1 END) AS between_to_the_30th,
+       COUNT(CASE WHEN login_at BETWEEN TIMESTAMP '2026-04-01' AND TIMESTAMP '2026-05-01' THEN 1 END) AS between_to_the_1st,
+       COUNT(CASE WHEN login_at >= TIMESTAMP '2026-04-01' AND login_at < TIMESTAMP '2026-05-01' THEN 1 END) AS half_open
+FROM logins
+'''
+note = "Four logins happened in April. The first BETWEEN finds three, because it stops at midnight on the 30th. The second finds five, because it takes the login at exactly midnight on 1 May."
+
+[[examples]]
+title = "Boundaries crossed are not time elapsed"
+code = '''
+SELECT date_diff('day', TIMESTAMP '2026-04-30 23:59:00', TIMESTAMP '2026-05-01 00:01:00') AS day_boundaries_crossed,
+       date_sub('day', TIMESTAMP '2026-04-30 23:59:00', TIMESTAMP '2026-05-01 00:01:00') AS whole_days_elapsed,
+       CAST(TIMESTAMP '2026-05-01 00:01:00' - TIMESTAMP '2026-04-30 23:59:00' AS VARCHAR) AS elapsed
+'''
+note = "Two minutes passed and `date_diff` reports one day, because midnight was crossed once. `date_sub` is DuckDB's function for complete units; subtracting the timestamps works in any engine."

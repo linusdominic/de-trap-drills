@@ -1,0 +1,24 @@
+title = "The Python round"
+round = "Python"
+summary = "Practical data wrangling in plain Python: streams you can read once, files that are not clean, and numbers that must be exact."
+outcome = "You can process an input that does not fit in memory, reject bad rows with a reason, and say what your code costs in time and space."
+
+[[stages]]
+title = "Read it once"
+note = "The input may be a file of any size or a stream that never ends. Keep only what you need."
+steps = ["c:streaming-and-memory", "d:merge-sorted-streams", "d:latest-by-key-late-arrival"]
+
+[[stages]]
+title = "The file is not clean"
+note = "Quoted commas, nested objects and malformed lines. Use the parser and report what you rejected."
+steps = ["c:parsing-messy-input", "d:csv-quoted-commas", "d:flatten-json", "d:slowest-endpoints-p95"]
+
+[[stages]]
+title = "Exact answers"
+note = "Floats, ties and percentiles each have more than one reasonable answer. Know which one you are giving."
+steps = ["c:exact-numbers", "d:reconcile-float-money", "d:second-highest-ties"]
+
+[[stages]]
+title = "Time in code"
+note = "Windows and day boundaries, with offsets in the input."
+steps = ["c:time-zones", "d:tumbling-windows-timezones"]

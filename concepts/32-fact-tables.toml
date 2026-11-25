@@ -1,0 +1,65 @@
+title = "Fact tables"
+area = "Data modeling"
+level = "core"
+summary = "A fact table records one business process at one grain, and its kind (transaction, periodic snapshot, accumulating snapshot) decides how its measures add up."
+drills = ["fanout-join-sum", "sum-after-dedupe"]
+
+idea = '''
+A fact table records a business process as rows of measurements, each with keys to the dimensions that describe it. There are three kinds.
+
+- **Transaction fact.** One row per event: an order line, a payment, a click. Rows are inserted and rarely change, and the measures are fully additive. This is the default.
+- **Periodic snapshot.** One row per entity per period: the balance of each account each day, the stock in each warehouse each day. Use it for a state that exists whether or not anything happened. Its measures are semi-additive: a balance sums across accounts but not across days.
+- **Accumulating snapshot.** One row per instance of a process, with a column for each milestone: application received, approved, funded, closed. The row is updated as the process advances. Use it to measure the time between the steps of a process with fixed stages.
+
+Rules that keep facts correct:
+
+- **One process and one grain per table.** Orders and payments are different processes with different grains. Put them in one table and every measure repeats or needs NULLs.
+- **Combine facts through dimensions, not directly.** Two facts joined to each other fan out. Aggregate each to a shared dimension level first.
+- **Keep the finest grain you can afford.** Detail can always be summed up. A summary cannot be split.
+- **Degenerate dimensions.** An identifier with no attributes of its own, such as an order number, lives on the fact as a plain column with no dimension table.
+- **Factless facts.** Some processes have no number to record, only that something happened: a student attended a class, a product was on promotion. The row is the measure, and you count rows.
+
+State the additivity of each measure. Amounts and counts add across every dimension. Balances do not add across time. Ratios and unit prices do not add at all, so store their components.
+'''
+
+asked = [
+  "Should orders and payments be one fact table or two?",
+  "How would you model a daily account balance?",
+  "How would you measure the time a loan application spends in each stage?",
+]
+
+answer = [
+  "Name the three kinds of fact and match one to the process in the question.",
+  "Give each fact one grain, and say it as a sentence.",
+  "Classify each measure as additive, semi-additive or non-additive.",
+  "Keep facts separate, and combine them only after aggregating each to a shared level.",
+  "Use a degenerate dimension or a factless fact where it fits.",
+]
+
+[[probes]]
+q = "Why not derive the daily balance from the transactions each time?"
+a = "You can, but every query then sums all of history. A periodic snapshot stores the state once per day, so a point-in-time question becomes a simple filter. The transactions remain the source of truth for rebuilding it."
+
+[[probes]]
+q = "How do you total a semi-additive measure over time?"
+a = "You do not sum it. Take the value at the end of the period, or an average over the period, and sum only across the other dimensions."
+
+[[probes]]
+q = "An order is edited after it was loaded. What happens to the fact?"
+a = "Either update the row in place, if only the current state matters, or insert adjustment rows (a reversal and a new entry), so that history is auditable and the totals stay additive."
+
+[[examples]]
+title = "A balance is semi-additive"
+setup = '''
+CREATE TABLE daily_balance (account_id INTEGER, balance_date DATE, balance INTEGER);
+INSERT INTO daily_balance VALUES
+  (1, '2026-03-01', 100), (1, '2026-03-02', 100), (1, '2026-03-03', 120),
+  (2, '2026-03-01', 50), (2, '2026-03-02', 70), (2, '2026-03-03', 70);
+'''
+code = '''
+SELECT
+  SUM(balance) AS sum_of_every_row,
+  SUM(balance) FILTER (WHERE balance_date = DATE '2026-03-03') AS held_on_the_last_day
+FROM daily_balance
+'''
+note = "Summing every row counts the same money once per day and reports 510. The two accounts held 190 on 3 March: add across accounts, pick one day."

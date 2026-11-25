@@ -1,0 +1,105 @@
+title = "Point-in-time joins"
+area = "Time and history"
+level = "advanced"
+summary = "An as-of join gives each event the latest value known at or before its own time, so that no row sees data from its future."
+drills = ["scd2-as-of-join"]
+
+idea = '''
+Many lookups are not "the matching row" but "the matching row that was current at that moment": the exchange rate when a payment was made, the price when a trade happened, a customer's risk score when a loan was approved. The lookup table holds a series of timestamped values per key, with no end dates. For each event you want the latest value at or before the event's time. That is an as-of join.
+
+Getting it wrong has a name in machine learning: **leakage**. If a training row for a loan approved in March carries a score computed in May, the model learns from information it will not have when it is used. The same mistake in a report shows past events with knowledge from later.
+
+There are three portable ways to write it:
+
+1. Join on the key and `value_time <= event_time`, then keep the latest candidate per event with `ROW_NUMBER`. Simple, but the join produces every earlier value for each event before the filter.
+2. Give each value an end with `LEAD(value_time)`, which turns the series into validity ranges, then join on a half-open range.
+3. A correlated or lateral subquery with `ORDER BY value_time DESC LIMIT 1`.
+
+Some engines have a dedicated form. DuckDB has `ASOF JOIN`, Snowflake has `ASOF JOIN` with a `MATCH_CONDITION`, and pandas has `merge_asof`. They are engine-specific, so know one portable form as well.
+
+Decide three things and say them:
+
+- **Inclusive or strict.** Does a value stamped at the same instant as the event count?
+- **Which time.** For leakage, what matters is when the value became available to you, not when it was measured. Join on the availability time.
+- **No match, or a stale match.** Keep the event with a NULL, and consider a limit on how old a value may be.
+'''
+
+asked = [
+  "Convert each payment to dollars using the exchange rate in force when it was made.",
+  "Build a training set for a model: each loan with the customer's features as they were at approval.",
+  "The rates table has one row per change and no end date. How do you join to it?",
+]
+
+answer = [
+  "Describe the goal precisely: per event, the latest value at or before the event time, for the same key.",
+  "Write one portable form, such as a range join after `LEAD`, or `ROW_NUMBER` over the candidates.",
+  "Name the engine's as-of join if it has one, and say that it is engine-specific.",
+  "State whether equality counts, and what happens to an event with no earlier value.",
+  "For training data, join on when the value became available, to prevent leakage.",
+]
+
+[[probes]]
+q = "Why not join each event to the latest value in the table?"
+a = "Because the latest value may be from after the event. For a report that rewrites history; for a training set it is leakage, and the model will look better in testing than it performs in production."
+
+[[probes]]
+q = "The ROW_NUMBER form is slow on a large table. Why, and what do you do?"
+a = "The inequality join pairs each event with every earlier value for its key before the filter keeps one. Turn the values into ranges with `LEAD` and join on the range, or use the engine's as-of join, which can merge two sorted inputs."
+
+[[probes]]
+q = "A feature is computed nightly for the previous day. Which timestamp do you join on?"
+a = "The time the feature was written, not the day it describes. Yesterday's value did not exist until tonight's job ran, so an event from this morning must not see it."
+
+[[probes]]
+q = "The last known rate is three weeks old. Should the join return it?"
+a = "That is a business rule, so I would ask. A tolerance, such as rejecting matches older than a set number of days, turns a silent stale value into a visible NULL that a data quality check can count."
+
+[[examples]]
+title = "DuckDB's ASOF JOIN"
+setup = '''
+CREATE TABLE fx_rates (currency VARCHAR, valid_at TIMESTAMP, rate_to_usd DECIMAL(6, 2));
+INSERT INTO fx_rates VALUES
+  ('EUR', '2026-03-01 00:00:00', 1.10), ('EUR', '2026-03-03 00:00:00', 1.20),
+  ('GBP', '2026-03-02 00:00:00', 1.30);
+CREATE TABLE payments (payment_id INTEGER, currency VARCHAR, amount INTEGER, paid_at TIMESTAMP);
+INSERT INTO payments VALUES
+  (1, 'EUR', 100, '2026-03-02 10:00:00'), (2, 'EUR', 50, '2026-03-03 00:00:00'),
+  (3, 'GBP', 40,  '2026-03-01 12:00:00'), (4, 'GBP', 10, '2026-03-05 09:00:00');
+'''
+code = '''
+SELECT p.payment_id, p.currency, p.paid_at, r.valid_at AS rate_from, r.rate_to_usd
+FROM payments AS p
+ASOF LEFT JOIN fx_rates AS r
+  ON r.currency = p.currency
+ AND p.paid_at >= r.valid_at
+ORDER BY p.payment_id
+'''
+note = "Payment 2 was made at the instant the rate changed and gets the new rate, because the condition is `>=`. Payment 3 was made before any GBP rate existed and keeps a NULL instead of taking a later rate."
+
+[[examples]]
+title = "The same result in portable SQL"
+setup = '''
+CREATE TABLE fx_rates (currency VARCHAR, valid_at TIMESTAMP, rate_to_usd DECIMAL(6, 2));
+INSERT INTO fx_rates VALUES
+  ('EUR', '2026-03-01 00:00:00', 1.10), ('EUR', '2026-03-03 00:00:00', 1.20),
+  ('GBP', '2026-03-02 00:00:00', 1.30);
+CREATE TABLE payments (payment_id INTEGER, currency VARCHAR, amount INTEGER, paid_at TIMESTAMP);
+INSERT INTO payments VALUES
+  (1, 'EUR', 100, '2026-03-02 10:00:00'), (2, 'EUR', 50, '2026-03-03 00:00:00'),
+  (3, 'GBP', 40,  '2026-03-01 12:00:00'), (4, 'GBP', 10, '2026-03-05 09:00:00');
+'''
+code = '''
+WITH ranges AS (
+  SELECT currency, rate_to_usd, valid_at,
+         LEAD(valid_at) OVER (PARTITION BY currency ORDER BY valid_at) AS next_valid_at
+  FROM fx_rates
+)
+SELECT p.payment_id, p.currency, p.paid_at, r.valid_at AS rate_from, r.rate_to_usd
+FROM payments AS p
+LEFT JOIN ranges AS r
+  ON r.currency = p.currency
+ AND p.paid_at >= r.valid_at
+ AND (p.paid_at < r.next_valid_at OR r.next_valid_at IS NULL)
+ORDER BY p.payment_id
+'''
+note = "`LEAD` gives every rate an end, the start of the next one, and the join becomes a half-open range. The four rows are the same as the ASOF JOIN's."

@@ -1,0 +1,113 @@
+title = "Event time, processing time and late data"
+area = "Time and history"
+level = "advanced"
+summary = "Data arrives out of order and after the day it belongs to. Decide what time you count by, how long you wait, and what happens to what comes later."
+drills = ["latest-by-key-late-arrival", "funnel-event-order"]
+
+idea = '''
+Every record has two times. **Event time** is when the thing happened, set by the source. **Processing time**, or ingestion time, is when your pipeline received it. They differ whenever a phone is offline, a batch is uploaded once a day, a message is retried, or a backlog is replayed after an outage.
+
+Three consequences:
+
+- The order of arrival is not the order of events. "The last row received" is not "the latest version". Order by a version or sequence that the source assigned.
+- A count per window of processing time measures your pipeline's delivery, not the business.
+- A day is not complete when the day ends. Rows for it keep arriving.
+
+So count by event time, and then decide how long to wait. A streaming job tracks a **watermark**: its estimate of the event time up to which it has seen everything, usually the newest event time seen minus an allowed delay. When the watermark passes the end of a window, the window is emitted and its state can be dropped. A record for a window that has already closed is **late**. There are three honest things to do with it: drop it and count the drops, send it to a side output, or emit a corrected result.
+
+The allowed delay is a trade. Longer means more complete results, later, with more state held in memory.
+
+Batch has the same problem in another form. Partition by event date, and on each run reprocess the recent partitions again, or exactly those partitions that received late rows. Each rerun must overwrite the partition, not append to it. A common design gives a fast number from the stream and a final one from a batch a day or two later.
+
+Keep both timestamps on every row. Without the ingestion time you cannot measure lateness, and without the event time you cannot fix it.
+'''
+
+asked = [
+  "Events per minute from mobile devices that are sometimes offline for hours. How do you count them?",
+  "What is a watermark?",
+  "Yesterday's revenue changed overnight. Is that a bug?",
+  "How do you handle late-arriving facts in a daily batch?",
+]
+
+answer = [
+  "Define event time and processing time, and say which the question should be counted by.",
+  "Explain the watermark as an estimate of completeness, and allowed lateness as a trade of completeness against delay and state.",
+  "Say what happens to late records: counted and dropped, routed aside, or used to correct the result.",
+  "In batch, partition by event date and reprocess recent or affected partitions with an overwrite.",
+  "Pick the latest version by a source-assigned version, not by arrival order.",
+  "Store both timestamps so that lateness can be measured.",
+]
+
+[[probes]]
+q = "How do you choose the allowed lateness?"
+a = "From the data: measure the distribution of ingestion time minus event time, and pick the delay that covers the share of records the consumer needs. Then monitor the late count, because that distribution changes when a client release or an outage changes it."
+
+[[probes]]
+q = "One device has a clock set a year ahead. What does it do to the watermark?"
+a = "If the watermark follows the newest event time seen, it jumps a year forward and every normal record becomes late. Reject or clamp event times that are implausibly far from the ingestion time before they reach the watermark."
+
+[[probes]]
+q = "The dashboard and the finance report disagree for the last two days. How do you explain it?"
+a = "The dashboard shows the fast number, counted when the watermark passed. The finance report waits for the batch that includes late records. They converge once the lookback period has passed, and I would label the recent days as provisional on the dashboard."
+
+[[probes]]
+q = "Why not reprocess all history every night to be safe?"
+a = "Cost and time grow with history, and most partitions never change. Reprocess a lookback window sized from the measured lateness, and handle anything older as an explicit, logged backfill of the partitions it touches."
+
+[[examples]]
+title = "The same events, counted by event day and by arrival day"
+setup = '''
+CREATE TABLE events (event_id INTEGER, event_at TIMESTAMP, ingested_at TIMESTAMP);
+INSERT INTO events VALUES
+  (1, '2026-03-01 10:00:00', '2026-03-01 10:00:05'),
+  (2, '2026-03-01 23:58:00', '2026-03-02 00:03:00'),
+  (3, '2026-03-01 15:00:00', '2026-03-03 08:00:00'),
+  (4, '2026-03-02 09:00:00', '2026-03-02 09:00:02'),
+  (5, '2026-03-02 11:00:00', '2026-03-02 11:00:01');
+'''
+code = '''
+WITH by_event AS (
+  SELECT CAST(event_at AS DATE) AS day,
+         COUNT(*) AS by_event_time,
+         COUNT(CASE WHEN CAST(ingested_at AS DATE) > CAST(event_at AS DATE) THEN 1 END) AS arrived_after_the_day
+  FROM events
+  GROUP BY 1
+), by_arrival AS (
+  SELECT CAST(ingested_at AS DATE) AS day, COUNT(*) AS by_arrival_time
+  FROM events
+  GROUP BY 1
+)
+SELECT COALESCE(e.day, a.day) AS day,
+       COALESCE(e.by_event_time, 0) AS by_event_time,
+       COALESCE(a.by_arrival_time, 0) AS by_arrival_time,
+       COALESCE(e.arrived_after_the_day, 0) AS arrived_after_the_day
+FROM by_event AS e
+FULL OUTER JOIN by_arrival AS a ON a.day = e.day
+ORDER BY 1
+'''
+note = "Three events happened on 1 March, but only one had arrived when the day ended. A job that ran at midnight and never looked back reports 1 for that day, and 3 March shows activity that did not happen then."
+
+[[examples]]
+title = "A watermark with an allowed delay"
+kind = "python"
+code = '''
+WINDOW = 10    # window length, in units of event time
+DELAY = 5      # how far the watermark trails the newest event seen
+
+# (event_time, name), in the order the pipeline receives them
+arrivals = [(1, "a"), (4, "b"), (12, "c"), (8, "d"), (17, "e"), (3, "f"), (26, "g")]
+
+open_windows = {}
+watermark = float("-inf")
+for event_time, name in arrivals:
+    start = event_time - event_time % WINDOW
+    if start + WINDOW <= watermark:
+        print(f"late  {name} (t={event_time}): window [{start}, {start + WINDOW}) is already closed")
+        continue
+    open_windows.setdefault(start, []).append(name)
+    watermark = max(watermark, event_time - DELAY)
+    for done in sorted(w for w in open_windows if w + WINDOW <= watermark):
+        print(f"emit  window [{done}, {done + WINDOW}) = {open_windows.pop(done)}  (watermark {watermark})")
+print("still open:", [f"[{w}, {w + WINDOW})" for w in sorted(open_windows)])
+'''
+note = "Event d (t=8) arrives after c (t=12) and is still counted, because the watermark trails by 5. Event f (t=3) arrives after its window was emitted and is reported as late instead of being lost without a trace."

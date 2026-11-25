@@ -1,0 +1,114 @@
+title = "Iterators, generators and what stays in memory"
+area = "Python"
+level = "core"
+summary = "Process input one item at a time and be able to say what you keep. list(), sorted() and len() on a stream read all of it first."
+drills = ["merge-sorted-streams", "latest-by-key-late-arrival"]
+
+idea = '''
+The follow-up to most Python data questions is "the file is 100 GB". The answer is in how you read it.
+
+An **iterator** hands out one item at a time and can be read once. A file object, a database cursor, a network stream and a generator are all iterators. A **generator** is a function that uses `yield`: it runs until the next `yield`, hands over one value, and pauses. Nothing is computed until someone asks for the next item, so a chain of generators moves one item through every stage before it reads the second.
+
+```python
+def parsed(lines):
+    for line in lines:
+        yield line.rstrip("\n").split("\t")
+```
+
+What defeats this is anything that needs the whole input first: `list(stream)`, `sorted(stream)`, `len(...)`, `f.readlines()`, `f.read()`, or reading the stream a second time. On an input that never ends, they never return.
+
+Memory is then whatever your code keeps between items, and you should say it out loud:
+
+- A running total or a counter: constant.
+- A dict of the latest value per key: one entry per distinct key, not per row.
+- A sort or an exact median: everything.
+
+The standard library does most of the work:
+
+- `heapq.merge` merges inputs that are already sorted, lazily, holding one item per input.
+- `heapq.nlargest(k, stream)` finds the top k while holding k items.
+- `itertools.islice` takes the first n without reading further.
+- `itertools.groupby` groups adjacent items only, so the input must already be sorted by the key.
+- `collections.deque(maxlen=n)` keeps the last n items.
+
+Two more facts to have ready. An iterator passed to two consumers gives the second one nothing. And if the per-key state itself does not fit in memory, the answer is no longer a cleverer loop: sort on disk, split the input by a hash of the key, or move the job to an engine built for it.
+'''
+
+asked = [
+  "Merge two sorted log files into one sorted output without loading either.",
+  "The top ten customers by spend, from a file too large for memory.",
+  "What is the difference between a list and a generator?",
+  "What is the memory use of your solution?",
+]
+
+answer = [
+  "Read the input once, item by item, and yield results as they are ready.",
+  "State what is held in memory and how it grows: per row, per key, or constant.",
+  "Avoid `list`, `sorted`, `len` and a second pass on anything that may be a stream.",
+  "Name the library tool, such as `heapq.merge` or `heapq.nlargest`, then show you can write it.",
+  "Say what you would do when the per-key state does not fit: external sort, partitioning, or a distributed engine.",
+]
+
+[[probes]]
+q = "Your function sorted the input first. What if the input never ends?"
+a = "Then it never returns. If the inputs are already sorted, merge them lazily and yield as you go. If they are not, a true stream cannot be fully sorted, so the question becomes a windowed or top-k one."
+
+[[probes]]
+q = "Why does the second loop over my generator print nothing?"
+a = "A generator is exhausted after one pass. Either build a list, if it fits, or create the generator again from the source. `itertools.tee` gives two iterators but buffers everything one of them has read ahead of the other."
+
+[[probes]]
+q = "Can you use itertools.groupby to total by customer?"
+a = "Only if the rows are already sorted by customer, because it starts a new group every time the key changes. On unsorted input, accumulate into a dict keyed by customer, which costs one entry per customer."
+
+[[probes]]
+q = "There are two billion distinct keys. Now what?"
+a = "A dict of them will not fit on one machine. Partition the input into files by a hash of the key, so that each file's keys fit, and process the files one at a time; or sort on disk and aggregate adjacent rows; or use a distributed engine, which does the same thing."
+
+[[examples]]
+title = "A lazy pipeline, and an iterator read twice"
+kind = "python"
+code = '''
+import itertools
+
+
+def numbers():
+    n = 0
+    while True:  # never ends
+        n += 1
+        yield n
+
+
+evens = (n for n in numbers() if n % 2 == 0)
+squares = (n * n for n in evens)
+print("first four squares of even numbers:", list(itertools.islice(squares, 4)))
+
+stream = iter([3, 1, 2])
+print("sum:", sum(stream))
+print("second read:", list(stream))
+'''
+note = "The source never ends, and the pipeline still returns, because `islice` asks for four items and nothing computes a fifth. The second read of `stream` is empty: the sum used it up."
+
+[[examples]]
+title = "heapq.merge pulls only what it needs"
+kind = "python"
+code = '''
+import heapq
+
+pulled = 0
+
+
+def source(values):
+    global pulled
+    for value in values:
+        pulled += 1
+        yield value
+
+
+merged = heapq.merge(source([1, 4, 9, 20]), source([2, 3, 30]), source([5, 6, 7, 8]))
+first = [next(merged) for _ in range(3)]
+print("first three:", first)
+print("items pulled from the sources so far:", pulled, "of 11")
+print("largest two of the rest:", heapq.nlargest(2, merged))
+'''
+note = "Three sorted inputs, eleven items, and the first three results needed only five reads: one item per input is held at a time. `nlargest` then reads the rest while keeping two."

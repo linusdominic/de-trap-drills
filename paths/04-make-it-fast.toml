@@ -1,0 +1,31 @@
+title = "Make it fast"
+round = "The scale follow-up"
+summary = "What to say when the interviewer asks for the same query on a very large table, with each standard answer measured on 100 million rows."
+outcome = "You can give the scale answer in order, say what you expect each step to save, and say how you would prove it from the plan."
+
+[[stages]]
+title = "The shape of the answer"
+note = "A fixed order to answer in, and how to read the evidence."
+steps = ["c:the-scale-answer", "c:reading-a-query-plan"]
+
+[[stages]]
+title = "Read less data"
+note = "The cheapest row is the one the engine never opens."
+steps = [
+  "c:partition-pruning",
+  "d:between-timestamp-end",
+  "c:sort-order-and-data-skipping",
+  "c:table-formats-and-file-layout",
+]
+
+[[stages]]
+title = "Do less work"
+note = "Process only what changed, compute repeated answers once, and know what a join costs."
+steps = [
+  "c:incremental-processing",
+  "d:dedupe-latest",
+  "c:pre-aggregation",
+  "d:rolling-7d-missing-days",
+  "c:joins-and-skew",
+  "d:fanout-join-sum",
+]

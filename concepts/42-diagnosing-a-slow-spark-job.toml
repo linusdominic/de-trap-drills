@@ -1,0 +1,53 @@
+title = "Diagnosing a slow Spark job"
+area = "Spark"
+level = "advanced"
+summary = "Find the slow stage, look at how task times are distributed inside it, and name the cause before you change a setting."
+drills = ["hot-key-partition", "coalesce-pulls-upstream"]
+
+idea = '''
+A slow job is a diagnosis question, not a tuning question. The interviewer wants the order you look in, and what each observation tells you.
+
+1. **Find the stage.** In the Spark UI, the Jobs and Stages pages show where the time went.
+2. **Look at the tasks of that stage.** The summary gives the minimum, median and maximum of task duration, input size, shuffle read size and spill.
+3. **Match the pattern to a cause**, using the list below.
+4. **Fix one thing and prove it.** Rerun on the same input, compare the stage's duration and its task distribution, and check that the output is unchanged.
+
+The patterns:
+
+- **One task far slower than the median, with a far larger shuffle read.** Skew: a hot key. Confirm by counting rows per key.
+- **Every task slow, and spilling to disk.** Partitions are too large. Raise the number of shuffle partitions, or filter and project earlier.
+- **Thousands of tasks that each take milliseconds.** Too many partitions, or too many small input files. The time goes into scheduling and file listing. Compact the input, or let adaptive query execution coalesce.
+- **A stage with a single task.** Something forced one partition: `coalesce(1)`, a window with no `PARTITION BY`, or one large compressed file that cannot be split.
+- **A scan that reads far more than the query needs.** A filter was not pushed down, or the partition column is missing from the filter. Read the plan.
+- **Long gaps in which no task runs.** The driver is busy: a `collect()`, a large broadcast, or planning over a very large number of files.
+
+Raising executor memory is the last step, not the first. It hides skew and oversized partitions without fixing either.
+
+When the question is about your own work, tell it in the same order: the symptom and what it cost, what you looked at, the cause, the fix, and the numbers before and after.
+'''
+
+asked = [
+  "A Spark job that took 20 minutes now takes three hours. Walk me through what you do.",
+  "One task takes far longer than all the others. Why?",
+  "An executor runs out of memory. What do you check before adding memory?",
+]
+
+answer = [
+  "Start in the Spark UI: the slow stage first, then the distribution of its task times and sizes.",
+  "Map what you see to a cause: skew, oversized partitions, too many tiny tasks, a single-partition stage, a missed pushdown, a busy driver.",
+  "Confirm the cause with a measurement, such as rows per key, the plan or the file count.",
+  "Change one thing, rerun on the same input, and compare before and after with the output unchanged.",
+  "Leave memory for last, and say why.",
+]
+
+[[probes]]
+q = "The job got slower but the code did not change. What changed?"
+a = "The data. Volume grew, a key became hot, the input arrived as many more small files, or a table's statistics went stale and the join strategy changed. Compare the stage sizes and the plan of a fast run with those of a slow one."
+
+[[probes]]
+q = "How do you confirm skew before fixing it?"
+a = "Sort the stage's task table by shuffle read size and look for one task far above the rest. Then count rows per join or grouping key and read the top few. That also tells you whether the hot key is a real value or a NULL or default."
+
+[[probes]]
+q = "Executors are being lost with out-of-memory errors. What do you check first?"
+a = "Skew first, then partitions that are too large, a broadcast that is bigger than its estimate, a `collect()` on the driver, and a cache that does not fit. More partitions is usually a cheaper fix than more memory."

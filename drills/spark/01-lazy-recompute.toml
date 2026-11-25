@@ -1,0 +1,76 @@
+title = "How often does the parser run?"
+family = "Laziness"
+pattern = "Actions and recomputation"
+obvious = "1000"
+question = "How many times was `parse` called in total?"
+
+prompt = '''
+A job parses 1,000 raw records with a Python function, then asks two things of the parsed data: how many records pass a filter, and what the total is.
+
+The function is expensive in the real job. Here it only counts its own calls.
+'''
+
+code = '''
+calls = spark.sparkContext.accumulator(0)
+
+@F.udf("long")
+def parse(raw):
+    calls.add(1)
+    return raw * 2
+
+parsed = spark.range(1000).withColumn("value", parse("id"))
+
+kept = parsed.filter("value % 4 = 0").count()
+total = parsed.agg(F.sum("value")).first()[0]
+'''
+
+measure = '''
+print(f"kept = {kept}, total = {total}")
+print(f"parse was called {calls.value} times for 1,000 records")
+first = calls.value
+
+calls2 = spark.sparkContext.accumulator(0)
+
+@F.udf("long")
+def parse2(raw):
+    calls2.add(1)
+    return raw * 2
+
+cached = spark.range(1000).withColumn("value", parse2("id")).cache()
+cached.filter("value % 4 = 0").count()
+cached.agg(F.sum("value")).first()
+print(f"with .cache() before the two actions: {calls2.value} times")
+answer(first)
+'''
+
+trap = '''
+`parsed` is not data. It is a recipe: read the range, call `parse` on each row. Nothing runs when the line is executed. Each **action** (`count`, `first`, `collect`, a write) runs the whole recipe again from the source, so two actions parse every record twice.
+
+Nothing warns you. The job is just twice as slow, or it calls a paid API twice, or it reads a source that changed between the two actions and gives two answers that do not agree.
+
+When a result is used by more than one action, `cache()` or `persist()` it, or write it out once and read it back. Caching is lazy too: it is filled by the first action that runs after it.
+'''
+
+scale = '''
+On a cluster, recomputation is the cost of the whole upstream lineage: the scans, the shuffles and the UDF. Cache only what is reused and fits in memory, and `unpersist()` it afterwards. For a long lineage reused by several outputs, writing an intermediate table is often cheaper and easier to debug than a cache. Do not count with accumulators inside transformations in production: a retried or speculative task adds to them again.
+'''
+
+[[options]]
+value = "1000"
+text = "1,000: once per record"
+why = "That would be true if `parsed` held the parsed rows. It holds the plan for producing them, and each action runs that plan again."
+
+[[options]]
+value = "2000"
+text = "2,000: once per record for each of the two actions"
+why = "Each action runs the lineage from the source. With no cache, the UDF runs for every record in both jobs."
+
+[[options]]
+value = "0"
+text = "0: Spark is lazy, so the function never runs"
+why = "Laziness delays the work until an action. `count()` and `first()` are actions, so the work happens, twice."
+
+[[options]]
+value = "500"
+text = "500: only the records that pass the filter"
+why = "The filter is on the function's output, so the function has to run on every record before any can be dropped."

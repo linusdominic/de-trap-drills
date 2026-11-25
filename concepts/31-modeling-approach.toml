@@ -1,0 +1,45 @@
+title = "A method for the modeling round"
+area = "Data modeling"
+level = "core"
+summary = "Six steps for designing analytical tables, from the business questions through a one-sentence grain to a query that proves the model."
+
+idea = '''
+In a modeling round you are given a product, such as a ride-sharing app, and asked to design its analytical tables. The interviewer watches the order you work in more than the final diagram. Six steps, in this order:
+
+1. **Ask what decisions the data serves.** Write down four to six business questions before you draw a table. They are your test cases at the end.
+2. **Name the business processes.** Trip requested, trip completed, payment taken, rating given. Each process is a candidate fact table.
+3. **Declare the grain.** One sentence per fact table: "one row per trip request, whether or not it was completed". This is the step people skip most often, and every later choice depends on it.
+4. **Choose dimensions and measures.** Dimensions describe the fact: who, what, where, when. Measures are the numbers: amounts, durations, counts. A measure must be true at the declared grain.
+5. **Decide how history works.** Which attributes change, and does the business need the value as it was (Type 2) or only as it is now (Type 1)?
+6. **Check the model against a question.** Take one question from step 1 and write the query. If it needs an awkward join or cannot be answered, change the model now.
+
+A good grain statement names the event and its boundaries. "One row per order" is weaker than "one row per order line, including cancelled lines". The second tells you what `COUNT(*)` means and which joins will fan out.
+
+Say your decisions aloud as you make them: why cancelled requests stay in the fact, why payments are a separate fact from trips, why timestamps are stored in UTC with the local date beside them. The reasoning is what is scored.
+'''
+
+asked = [
+  "Design the data model for a ride-sharing app.",
+  "What is the grain of this table?",
+  "Now write the query for weekly driver earnings against your model.",
+]
+
+answer = [
+  "Begin with the business questions and keep them as acceptance tests.",
+  "Map each business process to a fact table and state its grain in one sentence.",
+  "List dimensions and measures, and check that each measure is true at the grain.",
+  "Decide how history is handled for each attribute, and say why.",
+  "Prove the model by writing one of the queries against it.",
+]
+
+[[probes]]
+q = "Why not start with the tables?"
+a = "Because the same product supports many models and only the questions tell you which one is right. Starting from questions also gives you a way to check the design before the interviewer does."
+
+[[probes]]
+q = "The requirement changes: analysis is now needed per trip leg, not per trip."
+a = "Add a new fact table at the finer grain and keep the existing one. Changing the grain of a table in place breaks every query and every total built on it."
+
+[[probes]]
+q = "Star schema or one wide table?"
+a = "A star keeps facts narrow and dimensions reusable, and suits BI tools and many different questions. One wide denormalised table is faster and simpler for a fixed dashboard. Many teams build the star and derive wide tables from it."

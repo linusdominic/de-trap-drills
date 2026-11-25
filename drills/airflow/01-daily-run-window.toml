@@ -1,0 +1,85 @@
+title = "What does the first daily run load?"
+family = "Scheduling"
+pattern = "Logical date and data interval"
+obvious = "24"
+question = "On a default Airflow 3 installation, how many hours does the first scheduled run's window cover?"
+
+prompt = '''
+A daily DAG loads the sales that fall inside the run's data interval. It was written the way most tutorials show: a daily schedule, and a query between `data_interval_start` and `data_interval_end`.
+
+It is deployed to a new Airflow 3 installation with the default configuration.
+'''
+
+code = '''
+import pendulum
+from airflow.sdk import DAG, task
+
+with DAG(
+    "daily_sales",
+    schedule="@daily",
+    start_date=pendulum.datetime(2026, 3, 1, tz="UTC"),
+    catchup=True,
+):
+
+    @task
+    def load(data_interval_start=None, data_interval_end=None):
+        # SELECT ... WHERE sold_at >= data_interval_start AND sold_at < data_interval_end
+        hours = (data_interval_end - data_interval_start).total_seconds() / 3600
+        return f"loaded {hours:g} hours of sales"
+
+    load()
+'''
+
+measure = '''
+from airflow.timetables.interval import CronDataIntervalTimetable
+
+dag = scheduler_dag("daily_sales")
+print("schedule='@daily' became:", type(dag.timetable).__name__)
+first = runs_until(dag.timetable, dag.start_date, "2026-03-03T12:00:00Z", catchup=True)[0]
+hours = (first.data_interval.end - first.data_interval.start).total_seconds() / 3600
+print(f"first run starts at  {first.run_after}")
+print(f"data_interval_start  {first.data_interval.start}")
+print(f"data_interval_end    {first.data_interval.end}")
+print(f"window: {hours:g} hours")
+
+old = CronDataIntervalTimetable("@daily", timezone=pendulum.UTC)
+run = runs_until(old, dag.start_date, "2026-03-03T12:00:00Z", catchup=True)[0]
+print()
+print("the same schedule as a CronDataIntervalTimetable (the Airflow 2 behaviour):")
+print(f"first run starts at  {run.run_after}")
+print(f"data_interval_start  {run.data_interval.start}")
+print(f"data_interval_end    {run.data_interval.end}")
+answer(f"{hours:g}")
+'''
+
+trap = '''
+In Airflow 2, a cron schedule produced a run at the **end** of each interval: the run for 1 March started at midnight on 2 March, with a data interval covering the whole of 1 March. Years of tutorials and DAGs rely on that.
+
+Airflow 3 changed the default. With `create_cron_data_intervals = False`, which is the default, a cron expression or preset becomes a `CronTriggerTimetable`: the run starts at the cron time, and its data interval has the same start and end, both equal to the logical date. A query between `data_interval_start` and `data_interval_end` selects nothing, and `{{ ds }}` is the day that is just beginning, not the day that has just finished.
+
+The DAG does not fail. It runs green and loads zero rows, or loads a day that has barely started.
+'''
+
+scale = '''
+Say which you want and make it explicit, so that an upgrade or a config change cannot move it. To process a completed period, pass `CronDataIntervalTimetable("@daily", timezone="UTC")` as the schedule, or set `create_cron_data_intervals = True` for the installation. To keep the trigger behaviour, compute the period from the logical date in the task. Then add a volume check after the load: a daily table that receives zero rows should fail the run, whatever the cause.
+'''
+
+[[options]]
+value = "24"
+text = "24: the day that has just ended"
+why = "That is the Airflow 2 behaviour, and what a `CronDataIntervalTimetable` gives. The Airflow 3 default for a cron preset is a trigger timetable with an empty interval."
+
+[[options]]
+value = "0"
+text = "0: the interval starts and ends at the same instant"
+why = "A cron preset becomes a `CronTriggerTimetable` by default in Airflow 3, and its data interval is a single instant."
+
+[[options]]
+value = "48"
+text = "48: the first run also covers the day before the start date"
+why = "No run covers anything before `start_date`."
+
+[[options]]
+value = "1"
+text = "1: the hour before the run"
+why = "The schedule is daily. Nothing in it describes an hour."

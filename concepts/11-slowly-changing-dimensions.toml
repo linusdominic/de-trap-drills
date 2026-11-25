@@ -1,0 +1,110 @@
+title = "Slowly changing dimensions"
+area = "Time and history"
+level = "core"
+summary = "A Type 2 dimension keeps one row per version of an entity. Loading it needs a NULL-safe comparison; reading it needs the version valid at the event."
+drills = ["scd2-as-of-join", "scd2-load-null-change"]
+
+idea = '''
+A customer moves, a product is re-priced, a driver changes vehicle. The dimension has to decide what happens to the old value.
+
+- **Type 1: overwrite.** No history. Right for corrections, such as a misspelt name.
+- **Type 2: add a row.** Each version of the entity gets its own row with a validity range and its own surrogate key. This is the one that preserves what was true at the time.
+- **Type 3: add a column.** Keep `previous_city` beside `city`. One step of history, rarely enough.
+
+A Type 2 row carries the business key (`customer_id`), a surrogate key for the version (`customer_key`), `valid_from`, `valid_to` and usually `is_current`. Prefer a half-open range: `valid_from` included, `valid_to` excluded, with a far-future date on the current row. Then each version starts exactly where the previous one ends.
+
+**Loading** applies a batch of current values:
+
+1. A key whose tracked attributes changed: close the current row, then insert a new current row.
+2. A new key: insert a current row.
+3. An unchanged key: do nothing.
+
+The comparison in step 1 must be NULL-safe. `old.city <> new.city` is unknown when either side is NULL, so a change to or from NULL is missed. Use `IS DISTINCT FROM`, or compare a hash of the tracked columns. The load must also be safe to run twice for the same batch.
+
+**Reading** joins a fact to the version that was valid when the event happened:
+
+```sql
+JOIN dim_customer AS d
+  ON d.customer_id = f.customer_id
+ AND f.event_date >= d.valid_from
+ AND f.event_date <  d.valid_to
+```
+
+Joining on `is_current` instead shows every past event with today's attributes, and history is rewritten on each change. Many warehouses do this lookup once, at load time, and store the surrogate key on the fact.
+'''
+
+asked = [
+  "Revenue by customer segment for last year, using the segment each customer was in at the time.",
+  "Walk me through loading a Type 2 dimension from a daily snapshot.",
+  "What are SCD Types 1, 2 and 3, and when would you use each?",
+]
+
+answer = [
+  "Name the three types and say which attributes need history and which can be overwritten.",
+  "Describe the row: business key, surrogate key, validity range, current flag, and which end of the range is included.",
+  "Describe the load as close, insert, or leave alone, with a NULL-safe change test.",
+  "Join facts on the business key and the validity range, not on the current flag.",
+  "Name the integrity checks: no overlapping versions, no gaps, exactly one current row per key.",
+  "Say how a rerun of the same batch is kept from creating duplicate versions.",
+]
+
+[[probes]]
+q = "The same batch is loaded twice. What happens?"
+a = "Nothing, if the load compares the batch with the current row: the second run finds no differences and no new keys. A load that inserts without comparing creates a second, identical version, so the comparison is what makes it idempotent."
+
+[[probes]]
+q = "A customer changes city twice in one day and you load once a day. What do you see?"
+a = "Only the last value of the day. A daily snapshot cannot show changes inside the day. If those matter, load from a change feed and use timestamps for the validity range instead of dates."
+
+[[probes]]
+q = "A fact arrives for a customer who is not in the dimension yet. What do you do?"
+a = "Insert a placeholder dimension row for that business key, marked as inferred, and point the fact at it. When the real attributes arrive, update the placeholder in place. Dropping the fact or leaving its key NULL loses the event from every report."
+
+[[probes]]
+q = "A customer is deleted in the source. What happens in the dimension?"
+a = "Close the current row and do not open a new one, or open one flagged as deleted, depending on whether reports need to see the deletion. A snapshot load only notices this if it compares the dimension's current keys with the batch."
+
+[[examples]]
+title = "Each sale picks the price that was valid that day"
+setup = '''
+CREATE TABLE dim_product (product_key INTEGER, product_id VARCHAR, price INTEGER, valid_from DATE, valid_to DATE);
+INSERT INTO dim_product VALUES
+  (1, 'P1', 10, '2026-01-01', '2026-02-01'),
+  (2, 'P1', 12, '2026-02-01', '9999-12-31'),
+  (3, 'P2', 5,  '2026-01-01', '9999-12-31');
+CREATE TABLE sales (sale_id INTEGER, product_id VARCHAR, sold_on DATE, quantity INTEGER);
+INSERT INTO sales VALUES (1, 'P1', '2026-01-15', 2), (2, 'P1', '2026-02-01', 1), (3, 'P1', '2026-02-20', 3), (4, 'P2', '2026-01-31', 4);
+'''
+code = '''
+SELECT s.sale_id, s.sold_on, d.product_key, d.price, s.quantity * d.price AS amount
+FROM sales AS s
+JOIN dim_product AS d
+  ON d.product_id = s.product_id
+ AND s.sold_on >= d.valid_from
+ AND s.sold_on <  d.valid_to
+ORDER BY s.sale_id
+'''
+note = "Sale 2 happened on the day the price changed. With a half-open range it matches exactly one version, the new one, and sale 1 keeps the old price of 10."
+
+[[examples]]
+title = "A check that finds overlapping versions"
+setup = '''
+CREATE TABLE dim_customer (customer_key INTEGER, customer_id VARCHAR, city VARCHAR, valid_from DATE, valid_to DATE);
+INSERT INTO dim_customer VALUES
+  (1, 'C1', 'Leeds',  '2026-01-01', '2026-03-01'),
+  (2, 'C1', 'York',   '2026-02-15', '9999-12-31'),
+  (3, 'C2', 'Hull',   '2026-01-01', '2026-02-01'),
+  (4, 'C2', 'Durham', '2026-02-01', '9999-12-31');
+'''
+code = '''
+SELECT a.customer_id, a.customer_key AS version_a, b.customer_key AS version_b,
+       b.valid_from AS overlap_from, a.valid_to AS overlap_to
+FROM dim_customer AS a
+JOIN dim_customer AS b
+  ON b.customer_id = a.customer_id
+ AND a.customer_key < b.customer_key
+ AND a.valid_from < b.valid_to
+ AND b.valid_from < a.valid_to
+ORDER BY a.customer_id
+'''
+note = "Two half-open ranges overlap when each starts before the other ends. A healthy dimension returns no rows. Here customer C1 is in two cities from 15 February to 1 March, so any fact in that period would match twice."

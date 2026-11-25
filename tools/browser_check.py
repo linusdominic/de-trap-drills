@@ -5,10 +5,11 @@
 
 It serves docs/ on a local port, opens docs/?selftest=1 in headless Chrome and waits
 for the page to post back what happened when it ran every reference and naive answer
-in DuckDB-Wasm and Pyodide. It then runs the same answers here, with the Python
-package, and compares: the normalised result rows of every SQL answer, the output of
-every Python case, and the PASS/FAIL verdicts. Rows are compared in order for drills
-whose answer is ordered and as a multiset for the rest. Any difference is a failure.
+in DuckDB-Wasm and Pyodide, and every SQL example on the concept pages. It then runs
+the same code here, with the Python package, and compares: the normalised result rows
+of every SQL answer, the output of every Python case, the PASS/FAIL verdicts, and the
+rows of every concept example. Rows are compared in order for drills whose answer is
+ordered and as a multiset for the rest. Any difference is a failure.
 Results are written to results/browser-check.json.
 
 Set CHROME to the browser's path if it is not in a usual place.
@@ -32,6 +33,7 @@ from typing import Any
 
 import duckdb
 
+from trapdrills.content import load_concepts, run_sql_example
 from trapdrills.model import ROOT, load_drills
 from trapdrills.pycheck import run_python
 from trapdrills.sitebuild import TARGET, build
@@ -118,6 +120,15 @@ def browser_report(timeout: float) -> tuple[dict[str, Any], str]:
 def local_results() -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     for drill in load_drills():
+        if drill.kind == "predict":
+            # No engine runs in the browser for these: only the answer key and the verdicts are compared.
+            results[drill.id] = {
+                "track": drill.track,
+                "ordered": True,
+                "reference": drill.reference,
+                "naive": drill.naive,
+            }
+            continue
         if drill.track == "sql":
             reference: Any = [list(row) for row in run_answer(drill, drill.reference).rows]
             try:
@@ -141,11 +152,22 @@ def local_results() -> dict[str, dict[str, Any]]:
     return results
 
 
+def local_examples() -> dict[str, list[list[str | None]]]:
+    return {
+        f"{concept.id}:{i}": [list(row) for row in run_sql_example(example).rows]
+        for concept in load_concepts()
+        for i, example in enumerate(concept.examples, start=1)
+        if example.kind == "sql"
+    }
+
+
 def _in_order(rows: list[list[str | None]]) -> list[list[str | None]]:
     return sorted(rows, key=lambda row: [(value is None, value or "") for value in row])
 
 
 def same(track: str, ordered: bool, here: Any, there: Any) -> bool:
+    if isinstance(here, str):
+        return bool(here == there)
     if track == "sql":
         if isinstance(here, dict) or isinstance(there, dict):
             return isinstance(here, dict) and isinstance(there, dict)  # both failed to run
@@ -188,6 +210,17 @@ def main() -> int:
             print(f"         here : {json.dumps(here)[:600]}\n         there: {json.dumps(there)[:600]}")
         drills.append(entry)
 
+    examples = []
+    for key, rows in local_examples().items():
+        there = report.get("examples", {}).get(key)
+        # Engines may order unsorted rows differently, so examples are compared as multisets.
+        ok = isinstance(there, list) and _in_order(rows) == _in_order(there)
+        problems += not ok
+        print(f"{'ok' if ok else 'PROBLEM':8} example {key}")
+        if not ok:
+            print(f"         here : {json.dumps(rows)[:600]}\n         there: {json.dumps(there)[:600]}")
+        examples.append({"id": key, "same": ok})
+
     result = {
         "date": dt.date.today().isoformat(),
         "browser": chrome,
@@ -198,13 +231,15 @@ def main() -> int:
         "python_in_browser": report["pyodide"]["python"],
         "python_here": ".".join(str(n) for n in sys.version_info[:3]),
         "drills_checked": len(drills),
+        "examples_checked": len(examples),
         "problems": problems,
         "drills": drills,
+        "examples": examples,
     }
     RESULTS.parent.mkdir(exist_ok=True)
     RESULTS.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
     print(
-        f"\n{len(drills)} drills, {problems} problems. Browser: {chrome}; DuckDB {result['duckdb_in_browser']} there, "
+        f"\n{len(drills)} drills and {len(examples)} concept examples, {problems} problems. Browser: {chrome}; DuckDB {result['duckdb_in_browser']} there, "
         f"{result['duckdb_here']} here; Python {result['python_in_browser']} there, {result['python_here']} here."
     )
     return 1 if problems else 0

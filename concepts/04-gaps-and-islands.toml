@@ -1,0 +1,105 @@
+title = "Gaps and islands"
+area = "SQL correctness"
+level = "core"
+summary = "A streak, a session and a run of the same status are all islands: give each run of consecutive rows its own id, then group by it."
+drills = ["login-streaks-duplicates", "consecutive-months-year-boundary", "sessionize-datediff"]
+
+idea = '''
+An island is a run of rows that belong together because each one follows the last: consecutive login days, events less than 30 minutes apart, readings with the same status. A gap is the space between two islands. Every question of this family has the same shape: give each island an id, then `GROUP BY` that id.
+
+There are two ways to make the id.
+
+**1. Subtract a row number.** Number the rows of each key in order. Inside a run of consecutive days the date climbs by one and so does the row number, so `day - row_number` stays constant. A gap makes it jump.
+
+```sql
+day - CAST(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY day) AS INTEGER) AS island
+```
+
+This needs two things from the data. There must be exactly one row per step, so reduce to one row per key and day first. And the value must keep climbing by one: a month number restarts at 1 every January, so use `year * 12 + month`, or the truncated date.
+
+**2. Flag the starts and add them up.** Compare each row with the one before it using `LAG`. Write 1 where a new island starts and 0 elsewhere. A running `SUM` of the flags is the island id.
+
+```sql
+SUM(is_new) OVER (PARTITION BY user_id ORDER BY ts) AS island
+```
+
+This works with any rule: a gap longer than a threshold, a change of status, a change of device. Sessionization is this method with a time threshold.
+
+Use the first method when the steps are regular units and the second for everything else. In both, the first row of each key has no predecessor: `LAG` returns NULL there, so decide what that row is. It is normally the start of the first island.
+'''
+
+asked = [
+  "Find each user's longest streak of consecutive active days.",
+  "Split this clickstream into sessions: a new session starts after 30 minutes without an event.",
+  "Give me the start and end of every period this machine was down.",
+]
+
+answer = [
+  "Name the pattern and its shape: an island id per run, then an aggregate per island.",
+  "Choose between subtracting a row number (regular steps) and flag plus running sum (any rule).",
+  "Fix the grain first: one row per key and step, or duplicates split an island.",
+  "Use a sequence that keeps climbing across year ends.",
+  "Say how the first row of each key and the exact threshold (more than, or at least) are handled.",
+]
+
+[[probes]]
+q = "A user is active twice on the same day. What happens to the streak?"
+a = "With the row-number method the second row moves the row number without moving the date, so the constant shifts and the streak is cut in two. Reduce to one row per user and day before numbering."
+
+[[probes]]
+q = "Why not group by status to find the runs?"
+a = "Because the same status occurs in several separate runs, and `GROUP BY status` merges them into one. The island id has to come from the order of the rows, which is what the flag and running sum give you."
+
+[[probes]]
+q = "How would you return the gaps instead of the islands?"
+a = "Use `LEAD` to put the next row's start beside each row's end. Wherever the next start is later than the end plus one step, that pair is a gap, from end plus one step to the next start minus one."
+
+[[probes]]
+q = "Sessionizing a billion events: what is expensive?"
+a = "The sort inside each partition of the window. One user with a very large number of events makes one huge partition, so check for skew, and sessionize incrementally: only users with new events, carrying the last event time of each open session forward."
+
+[[examples]]
+title = "Runs of consecutive days: the date minus a row number"
+setup = '''
+CREATE TABLE readings (sensor VARCHAR, day DATE);
+INSERT INTO readings VALUES
+  ('s1', '2026-03-01'), ('s1', '2026-03-02'), ('s1', '2026-03-03'), ('s1', '2026-03-06'), ('s1', '2026-03-07'),
+  ('s2', '2026-03-02'), ('s2', '2026-03-04'), ('s2', '2026-03-05');
+'''
+code = '''
+WITH numbered AS (
+  SELECT sensor, day,
+         day - CAST(ROW_NUMBER() OVER (PARTITION BY sensor ORDER BY day) AS INTEGER) AS island
+  FROM readings
+)
+SELECT sensor, MIN(day) AS first_day, MAX(day) AS last_day, COUNT(*) AS days
+FROM numbered
+GROUP BY sensor, island
+ORDER BY sensor, first_day
+'''
+note = "Sensor s1 reported for three days, missed two, then reported for two more: two islands. The island value itself is a meaningless date; only its being constant matters."
+
+[[examples]]
+title = "Runs of the same status: flag the changes, then a running sum"
+setup = '''
+CREATE TABLE pump_status (ts TIMESTAMP, status VARCHAR);
+INSERT INTO pump_status VALUES
+  ('2026-03-01 08:00:00', 'on'),  ('2026-03-01 08:10:00', 'on'),
+  ('2026-03-01 08:20:00', 'off'), ('2026-03-01 08:30:00', 'off'),
+  ('2026-03-01 08:40:00', 'on'),  ('2026-03-01 08:50:00', 'on'), ('2026-03-01 09:00:00', 'on');
+'''
+code = '''
+WITH flagged AS (
+  SELECT ts, status,
+         CASE WHEN status IS DISTINCT FROM LAG(status) OVER (ORDER BY ts) THEN 1 ELSE 0 END AS is_new
+  FROM pump_status
+), runs AS (
+  SELECT ts, status, SUM(is_new) OVER (ORDER BY ts) AS run_id
+  FROM flagged
+)
+SELECT run_id, status, MIN(ts) AS first_seen, MAX(ts) AS last_seen, COUNT(*) AS readings
+FROM runs
+GROUP BY run_id, status
+ORDER BY run_id
+'''
+note = "The pump was on in two separate runs. Grouping by status alone would have merged them; the running sum keeps runs 1 and 3 apart."

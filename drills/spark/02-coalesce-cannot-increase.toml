@@ -1,0 +1,54 @@
+title = "More partitions for a slow stage"
+family = "Partitions"
+pattern = "repartition and coalesce"
+obvious = "100"
+question = "How many partitions does `wide` have?"
+
+prompt = '''
+A stage is slow, and someone decides the data needs to be spread over more tasks. The DataFrame has 8 partitions. They ask for 100.
+'''
+
+code = '''
+events = spark.range(0, 1_000_000, numPartitions=8)
+
+wide = events.coalesce(100)
+'''
+
+measure = '''
+print(f"events has {events.rdd.getNumPartitions()} partitions")
+print(f"events.coalesce(100) has {wide.rdd.getNumPartitions()} partitions")
+print(f"events.repartition(100) has {events.repartition(100).rdd.getNumPartitions()} partitions")
+answer(wide.rdd.getNumPartitions())
+'''
+
+trap = '''
+`coalesce` only merges partitions that already exist. It never moves rows between them, which is why it is cheap, and also why it cannot make more partitions than it was given. Asking for 100 when there are 8 returns 8, with no warning.
+
+To increase the number of partitions you need a shuffle: `repartition(100)`, or `repartition(100, "key")` to also control which rows land together.
+
+The same call hides in write code: `df.coalesce(n).write...` with an `n` larger than the current count does nothing.
+'''
+
+scale = '''
+Say what each costs. `repartition` is a full shuffle: every row is serialised, sent over the network and written to shuffle files. `coalesce` is a narrow operation. Use `coalesce` to reduce the number of output files after a filter has made partitions small, and `repartition` when you need more parallelism or an even spread. With adaptive query execution on, Spark already merges small shuffle partitions for you, so check the plan before adding either.
+'''
+
+[[options]]
+value = "100"
+text = "100"
+why = "`coalesce` cannot split a partition. It returned the DataFrame with the partitions it already had."
+
+[[options]]
+value = "8"
+text = "8"
+why = "`coalesce` only merges existing partitions, so it cannot go above the 8 it started with."
+
+[[options]]
+value = "4"
+text = "4: one per core of the local session"
+why = "The session has 4 cores, but the range was created with 8 partitions and `coalesce(100)` leaves them as they are."
+
+[[options]]
+value = "200"
+text = "200: the default number of shuffle partitions"
+why = "That setting applies after a shuffle. `coalesce` does not shuffle."

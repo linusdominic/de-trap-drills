@@ -1,0 +1,73 @@
+title = "Ten days late"
+family = "Scheduling"
+pattern = "Catch-up"
+obvious = "11"
+question = "How many runs does the scheduler create when the DAG is switched on?"
+
+prompt = '''
+A daily DAG has a start date of 1 March. It is deployed paused, and nobody switches it on until 00:30 on 11 March. The DAG file does not mention `catchup`.
+
+The installation is Airflow 3 with the default configuration.
+'''
+
+code = '''
+import pendulum
+from airflow.sdk import DAG, task
+
+with DAG(
+    "daily_export",
+    schedule="@daily",
+    start_date=pendulum.datetime(2026, 3, 1, tz="UTC"),
+):
+
+    @task
+    def export(ds=None):
+        return f"exported {ds}"
+
+    export()
+'''
+
+measure = '''
+dag = scheduler_dag("daily_export")
+print("catchup, as the scheduler sees it:", dag.catchup)
+switched_on = "2026-03-11T00:30:00Z"
+created = runs_until(dag.timetable, dag.start_date, switched_on, catchup=dag.catchup)
+print(f"runs created at {switched_on}: {len(created)}")
+print("  logical dates:", [str(run.logical_date.date()) for run in created])
+with_catchup = runs_until(dag.timetable, dag.start_date, switched_on, catchup=True)
+print(f"with catchup=True: {len(with_catchup)}")
+print("  logical dates:", str(with_catchup[0].logical_date.date()), "to", str(with_catchup[-1].logical_date.date()))
+answer(len(created))
+'''
+
+trap = '''
+In Airflow 2, `catchup` defaulted to true: switch a DAG on and the scheduler created one run for every interval since `start_date`. People learned to write `catchup=False` to avoid a flood of old runs.
+
+Airflow 3 reversed the default. `catchup_by_default` is false, so a DAG that says nothing gets only the most recent run. The ten earlier days are never scheduled, and nothing in the UI marks them as missing. If the DAG loads one day per run, the table has a ten-day hole.
+
+Both defaults catch people: the old one with an unexpected backfill, the new one with silent gaps.
+'''
+
+scale = '''
+Write `catchup` explicitly in every DAG and treat missed intervals as a decision. For a load that must cover every day, set `catchup=True` with `max_active_runs` limited, or leave catch-up off and run an explicit backfill for the gap. Either way the task must be idempotent, and a completeness check (one partition per day between two dates) is what tells you a day was never run.
+'''
+
+[[options]]
+value = "11"
+text = "11: one for every day from 1 March to 11 March"
+why = "That is `catchup=True`, the Airflow 2 default. In Airflow 3 catch-up is off unless you ask for it."
+
+[[options]]
+value = "1"
+text = "1: only the most recent"
+why = "With catch-up off, the scheduler skips the missed days and creates the latest run only."
+
+[[options]]
+value = "0"
+text = "0: nothing until midnight on 12 March"
+why = "The run for 11 March is already due at 00:30 on the 11th, so one run is created."
+
+[[options]]
+value = "10"
+text = "10: the ten complete days before 11 March"
+why = "Catch-up is off by default in Airflow 3, so the earlier days are not scheduled at all."

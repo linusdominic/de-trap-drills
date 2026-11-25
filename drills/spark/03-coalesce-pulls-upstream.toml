@@ -1,0 +1,63 @@
+title = "One output file"
+family = "Partitions"
+pattern = "coalesce before a write"
+obvious = "8"
+question = "The write runs as one stage. How many tasks did that stage run?"
+
+prompt = '''
+A job reads 8 partitions, filters them and must write a single output file. The author adds `coalesce(1)` just before the write, expecting the read and the filter to stay parallel and only the final write to be single.
+'''
+
+code = '''
+events = spark.range(0, 8_000_000, numPartitions=8)
+
+out = (
+    events.withColumn("bucket", F.col("id") % 10)
+    .filter("bucket = 3")
+    .coalesce(1)
+)
+out.write.mode("overwrite").parquet(f"{tmp}/bucket_3")
+'''
+
+measure = '''
+write = lambda frame: frame.write.mode("overwrite").parquet(f"{tmp}/bucket_3")
+with_coalesce = stages_of(lambda: write(out))
+print("coalesce(1):    stages and their task counts:", [tasks for _, tasks in with_coalesce])
+
+shuffled = events.withColumn("bucket", F.col("id") % 10).filter("bucket = 3").repartition(1)
+with_repartition = stages_of(lambda: write(shuffled))
+print("repartition(1): stages and their task counts:", [tasks for _, tasks in with_repartition])
+answer(with_coalesce[0][1])
+'''
+
+trap = '''
+`coalesce(1)` does not add a stage. It is a narrow operation, so Spark folds it into the stage that reads and filters, and that whole stage now runs as **one task**: one core reads all 8 input partitions, applies the filter and writes the file. The parallelism you had upstream is gone.
+
+`repartition(1)` inserts a shuffle. The read and the filter keep their 8 tasks, and only the stage after the shuffle is single.
+
+The symptom in the Spark UI is a stage with one task that takes as long as the whole job, and executors sitting idle.
+'''
+
+scale = '''
+On a real table this is the difference between minutes and hours, and the single task can run out of memory. If you need one file, use `repartition(1)` so that only the final write is serial, or write in parallel and compact afterwards. Better, ask why one file is needed: a table format with a target file size, or a downstream reader that accepts a directory, removes the requirement.
+'''
+
+[[options]]
+value = "8"
+text = "8: the read and the filter stay parallel"
+why = "They would with `repartition(1)`, which adds a shuffle. `coalesce(1)` is merged into the same stage, and the stage has as many tasks as its final partition count."
+
+[[options]]
+value = "1"
+text = "1: the whole stage runs as a single task"
+why = "`coalesce` is narrow, so the read, the filter and the write are one stage with one partition, and therefore one task."
+
+[[options]]
+value = "9"
+text = "9: eight for the read and one for the write"
+why = "That is the total for `repartition(1)`, across two stages. With `coalesce(1)` there is one stage and no shuffle."
+
+[[options]]
+value = "4"
+text = "4: one per core"
+why = "The number of tasks in a stage is its number of partitions, not the number of cores. Cores decide how many tasks run at once."

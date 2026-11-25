@@ -1,0 +1,77 @@
+title = "Partition pruning and sargable filters"
+area = "Performance at scale"
+level = "advanced"
+summary = "An engine skips files and row groups only when it can compare your filter with stored minimum and maximum values, so keep the filtered column bare."
+drills = ["between-timestamp-end"]
+experiment = "prune"
+
+idea = '''
+A large table is stored as many files, often one directory per partition value, such as a day. Inside a columnar file, each row group records the minimum and maximum of every column. Before reading, the engine compares your filter with those values and skips whatever cannot match. This is pruning. It is the cheapest speed-up there is, because skipped data costs no I/O, no decoding and no memory.
+
+Pruning only works when the engine can reason about the filter. A predicate that it can compare directly with stored values is called sargable.
+
+```sql
+-- can be compared with min/max values and partition values
+WHERE ts >= TIMESTAMP '2026-02-19' AND ts < TIMESTAMP '2026-02-20'
+-- hides the column inside a function
+WHERE strftime(ts, '%Y-%m-%d') = '2026-02-19'
+```
+
+The second form asks for the same rows, but the engine may have to compute the function for every row to find them. The same goes for arithmetic on the column, a cast of the column, and a join key wrapped in a function.
+
+Three levels of skipping are worth naming:
+
+- **Partition pruning.** A filter on the partition column removes whole directories without opening a file.
+- **File and row-group statistics.** A filter on any column is compared with min/max values. It helps most when the data is sorted or clustered on that column.
+- **Column pruning.** Select only the columns you need. A columnar reader never touches the others.
+
+Optimizers do rewrite some function calls into ranges. The measurement below includes one function that was rewritten and one that was not. You cannot tell which case you are in without reading the plan, so write the bare range and then check.
+'''
+
+asked = [
+  "This query filters on one day and still scans the whole table. Why?",
+  "How would you partition an events table that is mostly queried by date?",
+  "What does sargable mean?",
+]
+
+answer = [
+  "Explain what the engine compares: the filter against partition values and min/max statistics.",
+  "Keep the filtered column bare, and move any function or cast to the constant side.",
+  "Use a half-open range on the timestamp. It is both correct and prunable.",
+  "Filter on the partition column itself when there is one, and select only the columns you need.",
+  "Confirm it in the plan: files or rows read by the scan, before and after.",
+]
+
+[[probes]]
+q = "The table is partitioned by `event_date` and users filter on the timestamp `ts`. Does the engine prune?"
+a = "Not necessarily. Unless the table format knows how the partition derives from `ts` (Iceberg's hidden partitioning is one example), a filter on `ts` can only use file statistics. Add the matching filter on `event_date` as well."
+
+[[probes]]
+q = "Why not partition by user id too?"
+a = "A high-cardinality partition column creates a very large number of tiny files, and listing and opening them costs more than the pruning saves. Partition on a low-cardinality column that most queries filter on, and sort or cluster inside it for the rest."
+
+[[probes]]
+q = "Does `date_trunc('day', ts) = ...` prune?"
+a = "It depends on the engine and its version. Some optimizers rewrite it into a range and some do not, so do not rely on it: write the range yourself and read the plan."
+
+[[examples]]
+title = "Pruning by hand: which files can hold 19 February?"
+setup = '''
+CREATE TABLE files (file_name VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count INTEGER);
+INSERT INTO files VALUES
+  ('part-0017.parquet', '2026-02-17 00:00:02', '2026-02-17 23:59:58', 1000000),
+  ('part-0018.parquet', '2026-02-18 00:00:01', '2026-02-18 23:59:59', 1000000),
+  ('part-0019.parquet', '2026-02-19 00:00:00', '2026-02-19 23:59:57', 1000000),
+  ('part-0020.parquet', '2026-02-20 00:00:03', '2026-02-20 23:59:59', 1000000);
+'''
+code = '''
+SELECT
+  file_name,
+  CASE
+    WHEN max_ts >= TIMESTAMP '2026-02-19' AND min_ts < TIMESTAMP '2026-02-20' THEN 'read'
+    ELSE 'skip'
+  END AS decision
+FROM files
+ORDER BY file_name
+'''
+note = "This is the comparison an engine makes with a range filter: only one file's min/max range overlaps the day, so three of the four are never opened. With a function around the column there is nothing to compare."

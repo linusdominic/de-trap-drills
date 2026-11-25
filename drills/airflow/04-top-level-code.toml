@@ -1,0 +1,79 @@
+title = "A helper at the top of the DAG file"
+family = "Parsing"
+pattern = "Top-level code"
+obvious = "1"
+question = "No run has started yet. The DAG processor has parsed the file 5 times. How many times was `load_table_list` called?"
+
+prompt = '''
+A DAG creates one export task per table. The list of tables comes from a helper that, in the real system, queries a configuration database and takes about a second. Here it only records that it was called.
+'''
+
+code = '''
+import os
+
+import pendulum
+from airflow.sdk import DAG, task
+
+
+def load_table_list():
+    with open(os.environ.get("CALLS_LOG", "calls.log"), "a") as log:
+        log.write("called\n")
+    return ["orders", "customers", "payments"]
+
+
+TABLES = load_table_list()
+
+with DAG("export_tables", schedule="@daily", start_date=pendulum.datetime(2026, 3, 1, tz="UTC")):
+    for table in TABLES:
+
+        @task(task_id=f"export_{table}")
+        def export(table=table):
+            return table
+
+        export()
+'''
+
+measure = '''
+calls_log.write_text("")
+for _ in range(5):
+    parse_all()
+parsed = len(calls_log.read_text().splitlines())
+print(f"after 5 parses of the DAG folder, with no run: load_table_list was called {parsed} times")
+calls_log.write_text("")
+states = test_run("export_tables", "2026-03-05")
+ran = len(calls_log.read_text().splitlines())
+print(f"during one run of its {len(states)} tasks: called {ran} more times")
+answer(parsed)
+'''
+
+trap = '''
+A DAG file is a Python module, and Airflow imports it again and again: the DAG processor re-parses every file on a loop to pick up changes, and the file is imported once more wherever a task of the DAG runs. Everything at the top level of the file runs on **each** of those imports.
+
+So the helper runs on every parse, whether or not the DAG ever runs. With a one-second query in it, the file takes a second to parse, on every loop, forever. Do that in a few hundred DAG files and the processor falls behind: new DAGs appear late, and the configuration database gets a steady stream of queries from the scheduler host.
+
+The top level should only define things. Work belongs inside tasks.
+'''
+
+scale = '''
+Keep the top level to imports and cheap definitions. For a task list that comes from outside, read it from a file deployed with the DAG, or use dynamic task mapping, where one task returns the list at run time and the next is expanded over it. Do not call `Variable.get`, a database or an API at the top level. Measure it: the DAG processor reports parse time per file, and a slow file is visible there long before it causes an incident.
+'''
+
+[[options]]
+value = "0"
+text = "0: it runs only when a task runs"
+why = "It is called at the top level of the module, not inside a task, so importing the file is enough to run it."
+
+[[options]]
+value = "1"
+text = "1: once, when the file was first loaded"
+why = "The file is not loaded once. The DAG processor imports it on every parse."
+
+[[options]]
+value = "5"
+text = "5: once for every parse"
+why = "Top-level code runs each time the file is imported, and each parse is an import."
+
+[[options]]
+value = "15"
+text = "15: once per table on every parse"
+why = "The helper returns the whole list in one call. The loop over tables comes after it."

@@ -1,7 +1,7 @@
 [project]
 name = "trapdrills"
 version = "0.1.0"
-description = "Data engineering drills where the obvious answer fails: SQL and Python exercises on datasets with the trap planted, checked by running your answer."
+description = "Interview prep for data engineers: learning paths, concept pages and SQL and Python drills on datasets with a trap planted, checked by running your answer."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
@@ -48,6 +48,12 @@ files = ["src/trapdrills", "tools"]
 # the browser. It handles arbitrary JSON and arbitrary user code, so it is left untyped.
 module = ["trapdrills.pyrunner"]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# The two evidence tools run outside this environment, with PySpark or Airflow fetched
+# for that run, so their imports are not installed here.
+module = ["pyspark.*", "airflow.*", "pendulum.*", "time_machine.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

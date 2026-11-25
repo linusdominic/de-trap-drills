@@ -1,0 +1,69 @@
+title = "Dependencies, branching and trigger rules"
+area = "Airflow"
+level = "core"
+summary = "A task runs only if its trigger rule accepts the states of its upstream tasks. The default needs every one to succeed, and a skip is not a success."
+drills = ["branch-then-join"]
+
+idea = '''
+`a >> b` says that `b` comes after `a`. Whether `b` actually runs is decided by its **trigger rule**, applied to the final states of its direct upstream tasks: success, failed, skipped or upstream_failed.
+
+The default rule is `all_success`: run only if every upstream succeeded. Two things follow.
+
+- **A failure propagates.** If `a` fails, `b` becomes `upstream_failed`, and so does everything after it.
+- **A skip propagates too.** If any upstream is skipped, a task with `all_success` is skipped, and that carries on down the chain.
+
+Branching is where this bites. A branch task picks one path and skips the others:
+
+```python
+@task.branch
+def choose():
+    return "full_load"
+
+choose() >> [full_load, incremental_load] >> publish
+```
+
+`incremental_load` is skipped by design. `publish` then has one succeeded upstream and one skipped, so under `all_success` it is skipped as well. The run is marked successful, and nothing was published.
+
+The join after a branch needs a rule that tolerates skips:
+
+```python
+publish = EmptyOperator(task_id="publish", trigger_rule="none_failed_min_one_success")
+```
+
+The rules worth knowing by name:
+
+- `all_success`: the default.
+- `none_failed_min_one_success`: no upstream failed and at least one succeeded. The rule for a join after a branch.
+- `all_done`: every upstream finished, in any state. For cleanup and notification tasks that must run after a failure.
+- `one_failed`: at least one upstream failed. For an alerting path.
+
+For a resource that must be released, such as a cluster created for the run, use setup and teardown tasks. A teardown runs if its setup succeeded, even when the work between them failed, and by default its own result is ignored when the run's state is decided.
+
+Be careful with `all_done` on the last task. A run's state comes from its leaf tasks, so a cleanup leaf that succeeds can make a failed run look green.
+'''
+
+asked = [
+  "After a branch, the task that joins the two paths never runs. Why?",
+  "What is a trigger rule, and what is the default?",
+  "How do you make sure a cleanup task runs even when the job fails?",
+]
+
+answer = [
+  "Dependencies set the order; the trigger rule decides whether a task runs at all.",
+  "The default is `all_success`, and both failures and skips cascade downstream under it.",
+  "A join after a branch needs `none_failed_min_one_success`.",
+  "Cleanup uses `all_done` or, better, setup and teardown tasks.",
+  "A run's state comes from its leaf tasks, so watch for a cleanup leaf that hides a failure.",
+]
+
+[[probes]]
+q = "The run is green, but the publish task did not run. How is that possible?"
+a = "The task was skipped, not failed, and a skipped leaf does not fail a run. Look at task states and not only the run state, and alert when a task that should always run is skipped."
+
+[[probes]]
+q = "Why not put all_done on the join task?"
+a = "`all_done` would also run the join when the chosen branch failed, so it would publish after a failed load. `none_failed_min_one_success` runs it only when nothing failed and something succeeded."
+
+[[probes]]
+q = "all_done, or a teardown task, for deleting a cluster?"
+a = "A teardown. It is tied to its setup and runs only if the setup succeeded, and by default it is left out when the run's state is decided, so a successful cleanup does not hide a failed job."

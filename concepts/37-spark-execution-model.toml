@@ -1,0 +1,59 @@
+title = "Lazy evaluation: jobs, stages and tasks"
+area = "Spark"
+level = "core"
+summary = "A transformation only describes work. An action runs it, and every action reruns the whole lineage unless you cached the result."
+drills = ["lazy-recompute"]
+
+idea = '''
+A Spark DataFrame is a plan, not data. `filter`, `select`, `withColumn`, `join` and `groupBy` are **transformations**: they return a new plan and run nothing. An **action** such as `count`, `collect`, `show` or a write asks for a result, and only then does Spark execute.
+
+One action starts one or more **jobs**. Spark cuts each job into **stages** at every shuffle, and runs each stage as one **task** per partition. A **narrow** transformation (`filter`, `select`) works inside a partition and stays in the same stage. A **wide** one (`groupBy`, `join`, `distinct`, `repartition`) needs rows with the same key in the same place, so it ends the stage with a shuffle.
+
+The consequence that catches people: a DataFrame does not hold its result. Each action starts again from the source.
+
+```python
+parsed = raw.withColumn("v", parse_udf("payload"))
+bad = parsed.filter("v IS NULL").count()   # reads and parses everything
+parsed.write.parquet(out)                  # reads and parses everything again
+```
+
+If a result is reused, `cache()` or `persist()` it. Caching is lazy too: nothing is stored until the first action runs, and that action pays for the storage. Cache only what is used more than once and fits in memory. Otherwise it takes memory from the job for nothing. Call `unpersist()` when you are done.
+
+Two more effects of laziness:
+
+- The optimizer sees the whole plan before running it, so it can drop work the result does not need. A `count()` needs no columns, so an expensive column expression may never be evaluated.
+- Errors surface at the action, not on the line that caused them.
+
+Do not count things with side effects in a UDF, or with accumulators inside transformations. A retried task runs the code again, and a recomputed plan runs it once per action.
+'''
+
+asked = [
+  "What happens when you call `df.filter(...)`? And when you call `df.count()`?",
+  "This job reads the same source three times. Why?",
+  "What is the difference between a job, a stage and a task?",
+  "When would you cache a DataFrame?",
+]
+
+answer = [
+  "Transformations build a plan and an action runs it.",
+  "One job per action, a new stage at every shuffle, one task per partition.",
+  "Narrow transformations stay inside a stage; wide ones end it with a shuffle.",
+  "Every action recomputes the lineage unless the result was cached or written out.",
+  "Cache only what is reused and fits, and say that caching is itself lazy.",
+]
+
+[[probes]]
+q = "You call cache() and the next action is slower than before. Why?"
+a = "`cache()` only marks the plan. The first action after it computes the data and also stores it, so that action pays for both. Later actions read the stored copy."
+
+[[probes]]
+q = "cache(), or write an intermediate table and read it back?"
+a = "A cache lives with the application, and if an executor is lost Spark recomputes the missing part from the lineage. A written table costs I/O but cuts the lineage, survives failures and can be inspected. For a long pipeline the written table is the safer choice."
+
+[[probes]]
+q = "An accumulator updated inside a UDF shows twice the number of input rows. What happened?"
+a = "The plan ran twice, once for each action, or tasks were retried. Updates made inside transformations are applied every time the code runs. Spark only guarantees an update is applied once when it is made inside an action."
+
+[[probes]]
+q = "Why did the error appear at the write and not at the line with the bug?"
+a = "The line with the bug only added a step to the plan. Nothing ran until the write asked for a result, so that is where the failure is reported. Read the stack trace for the failing expression, not the line number of the action."

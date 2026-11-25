@@ -1,0 +1,65 @@
+title = "DAG parsing and top-level code"
+area = "Airflow"
+level = "advanced"
+summary = "Airflow imports every DAG file again and again. Code at the top level of the file runs on each parse, so keep it to cheap definitions."
+drills = ["top-level-code"]
+
+idea = '''
+A DAG file is a Python module, and Airflow finds your DAGs by importing it. That import does not happen once. The DAG processor parses each file again on a loop (by default every 30 seconds in Airflow 3.4, `[dag_processor] min_file_process_interval`), and a worker imports the file again to run a task.
+
+Everything at the top level of the module runs on every one of those imports, whether or not any task runs.
+
+```python
+# both lines run on every parse
+tables = requests.get(CONFIG_URL).json()
+cutoff = Variable.get("cutoff")
+
+with DAG("load", schedule="@daily", start_date=START) as dag:
+    for name in tables:
+        make_load_task(name)
+```
+
+What that costs:
+
+- **Load on other systems.** One call per file, per parse, around the clock.
+- **Slow parsing.** New runs and code changes wait on the parse loop, and a file that exceeds the import timeout becomes an import error.
+- **Fragility.** If the API is down, the import fails and the DAG is reported as an import error. It cannot be scheduled until a later parse succeeds.
+- **A moving DAG.** If the top-level code returns something different between two parses, the scheduler and the worker disagree about which tasks exist.
+
+The rules that follow:
+
+1. Top-level code only defines things: imports, constants, the DAG and its tasks.
+2. Anything that touches a database, an API or a file system goes inside a task, where it runs once per task instance.
+3. Read Variables and Connections at run time: inside the task, or in a templated field such as `{{ var.value.cutoff }}`.
+4. Import heavy libraries inside the task function, not at the top of the file.
+5. If the set of tasks depends on data, use dynamic task mapping, which expands at run time, or generate the DAG from a file deployed with the code.
+
+After every deploy, check for import errors with `airflow dags list-import-errors`, and parse every DAG file in CI.
+'''
+
+asked = [
+  "What is top-level code in a DAG file, and why does it matter?",
+  "The source database shows a query from Airflow every few seconds, even when no DAG is running. Where do you look?",
+  "How do you build a DAG whose tasks depend on a list stored in a database?",
+]
+
+answer = [
+  "A DAG file is imported repeatedly by the DAG processor, and again by the worker that runs a task.",
+  "Everything at module level runs on each import, whether or not a task runs.",
+  "The costs: load on other systems, slow scheduling, and a DAG that disappears when the call fails.",
+  "Move all I/O into tasks, and read Variables through templates or inside the task.",
+  "For structure that depends on data, use dynamic task mapping or a config file deployed with the code.",
+  "Check for import errors in CI and after each deploy.",
+]
+
+[[probes]]
+q = "Is Variable.get at the top of the file really a problem?"
+a = "It is a lookup in the metadata database or the secrets backend on every parse of every file that does it. Inside a task, or through a template, the same lookup runs once per task instance."
+
+[[probes]]
+q = "A DAG vanished from the UI after a deploy. What happened?"
+a = "Most likely the file no longer imports: a syntax error, a package missing where the DAG processor runs, or top-level code that failed. `airflow dags list-import-errors` prints the traceback."
+
+[[probes]]
+q = "How do you test DAG files?"
+a = "A CI test that loads every file and asserts there are no import errors, plus checks on what you care about, such as a fixed start date and required owners or tags. Then a test run of the DAG for one date."

@@ -1,0 +1,71 @@
+title = "Rerun the fifth of March"
+family = "Reruns"
+pattern = "Idempotent tasks"
+obvious = "logical"
+question = "Which day's partition does the rerun write?"
+
+prompt = '''
+A daily export writes one partition per day. The run for 5 March produced bad data because of an upstream problem, which is now fixed. Weeks later, an engineer reruns the DAG for 5 March to repair that partition.
+'''
+
+code = '''
+import datetime
+
+import pendulum
+from airflow.sdk import DAG, task
+
+with DAG("orders_export", schedule="@daily", start_date=pendulum.datetime(2026, 3, 1, tz="UTC")):
+
+    @task
+    def export():
+        day = datetime.date.today().isoformat()
+        # ... query the orders of `day` and overwrite s3://lake/orders/day={day}/
+        return day
+
+    export()
+'''
+
+measure = '''
+import datetime
+
+states = test_run("orders_export", "2026-03-05")
+written = returned("orders_export", "export")
+today = datetime.date.today().isoformat()
+print("the run's logical date:  2026-03-05")
+print("task state:             ", states["export"])
+print(f"partition written:       day={written}")
+print(f"the date this was run:   {today}")
+answer("logical" if written == "2026-03-05" else "today" if written == today else "other")
+'''
+
+trap = '''
+A task instance belongs to a DAG run, and the run has a date: the logical date, available as `{{ ds }}`, `logical_date` or the data interval. That date is what "the run for 5 March" means. It stays the same when the task is retried, cleared or backfilled.
+
+`date.today()` and `datetime.now()` ask the wall clock. On the scheduled day they happen to agree with the run's date, so the DAG works for months. On a rerun they do not: the task overwrites **today's** partition with whatever it computes, and the partition for 5 March stays broken. The run is green.
+
+The same bug hides in SQL: `CURRENT_DATE` inside the task's query.
+'''
+
+scale = '''
+Derive everything the task reads and writes from the run's dates: the source filter, the target partition, the file name. Then a rerun, a retry and a backfill of 90 days all do the right thing, and you can run backfills in parallel. Review DAGs for `now()`, `today()` and `CURRENT_DATE`, and test a task by running it for an old logical date and checking which partition changed.
+'''
+
+[[options]]
+value = "logical"
+text = "5 March: the date of the run being repeated"
+why = "It would if the task used the run's logical date. This task asks the wall clock."
+
+[[options]]
+value = "today"
+text = "The day the rerun happens"
+why = "`date.today()` is evaluated when the task runs, so the task writes today's partition and leaves 5 March as it was."
+
+[[options]]
+value = "other"
+text = "6 March: the day after the logical date"
+why = "Nothing in the task refers to the run's dates at all, shifted or not."
+
+[[options]]
+value = "none"
+text = "None: Airflow refuses to rerun a run that already succeeded"
+why = "Clearing or rerunning a past run is a normal operation, which is exactly why tasks must be safe to repeat."

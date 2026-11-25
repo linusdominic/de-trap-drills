@@ -1,0 +1,66 @@
+title = "Reading a Spark plan, and what a UDF hides from it"
+area = "Spark"
+level = "advanced"
+summary = "The physical plan shows what Spark will read and move. A Python UDF is opaque to the optimizer, so a filter behind it is not pushed to the files."
+drills = ["udf-blocks-pushdown"]
+
+idea = '''
+`df.explain()` prints the physical plan. Read it from the bottom up: the scans are at the bottom and the result is at the top. Four things answer most performance questions.
+
+- **The scan.** For a Parquet source the scan lists `PushedFilters`, `PartitionFilters` and `ReadSchema`. Pushed filters are handed to the reader, which uses them to skip row groups. Partition filters remove whole directories. `ReadSchema` lists the columns that are actually read.
+- **Exchanges.** Every `Exchange` is a shuffle. Count them.
+- **The join node.** `BroadcastHashJoin`, `SortMergeJoin` or `ShuffledHashJoin`.
+- **`AdaptiveSparkPlan`.** With adaptive query execution on, `isFinalPlan=false` means the plan can still change once stages have run.
+
+```text
+FileScan parquet [id,country] ... PartitionFilters: [],
+  PushedFilters: [IsNotNull(country), EqualTo(country,PK)],
+  ReadSchema: struct<id:bigint,country:string>
+```
+
+That is a shortened illustration of a scan line. The filter `country = 'PK'` reached the reader, and only two columns are read.
+
+Now write the same filter as a Python UDF:
+
+```python
+@udf("boolean")
+def is_pk(country):
+    return country == "PK"
+
+events.filter(is_pk("country"))
+```
+
+The optimizer cannot see inside the function. The scan shows `PushedFilters: []`, every row is read, and a Python evaluation node appears in the plan (`BatchEvalPython` or `ArrowEvalPython`, depending on the version and settings). Rows are serialised, sent to a Python worker process, and the results are sent back.
+
+So the order of preference is:
+
+1. Built-in functions and SQL expressions. The optimizer understands them, and they run inside the JVM.
+2. Pandas UDFs, which receive a whole batch as Arrow data and are usually cheaper per row. They are still opaque: nothing is pushed down through them.
+3. A plain Python UDF, as the last resort. Filter with built-ins first, so that it sees fewer rows.
+'''
+
+asked = [
+  "How do you read the output of `explain()`?",
+  "Why is a Python UDF slow?",
+  "How do you check that a filter is pushed down to the Parquet files?",
+]
+
+answer = [
+  "Read the plan bottom up: the scan, the exchanges, the join node, and whether it is the final adaptive plan.",
+  "On the scan, check `PushedFilters`, `PartitionFilters` and `ReadSchema`.",
+  "A UDF is a black box: no pushdown through it, and rows are serialised to a Python process.",
+  "Prefer built-in functions, then pandas UDFs, then a Python UDF after the built-in filters.",
+  "Confirm with the plan and with the rows the scan actually read in the Spark UI.",
+]
+
+[[probes]]
+q = "The filter is listed in PushedFilters. Does that mean rows were skipped?"
+a = "It means the reader was given the filter. Row groups are skipped only when their statistics rule them out, which depends on how the data is sorted. Spark applies the filter again afterwards, so the result is right either way. The scan's output rows in the Spark UI show what was really read."
+
+[[probes]]
+q = "Which filters cannot be pushed down?"
+a = "Anything the source cannot evaluate: a UDF, and many expressions that wrap the column in a function or a cast. A bare column compared with a literal is the safe form. When unsure, read the scan line of the plan."
+
+[[probes]]
+q = "explain() showed a sort-merge join, but the Spark UI shows a broadcast join. Which is right?"
+a = "The UI. `explain()` before execution prints the initial plan. Adaptive query execution re-planned the join after it saw the real size of a finished shuffle stage, and the UI shows the plan that ran."

@@ -1,0 +1,101 @@
+title = "Missing rows and the date spine"
+area = "SQL correctness"
+level = "core"
+summary = "GROUP BY returns only the groups that have rows, so a day with no orders is absent, not zero. Build the full set of keys and join to it."
+drills = ["rolling-7d-missing-days", "mom-growth-missing-month"]
+
+idea = '''
+A fact table records what happened. It has no row for a day on which nothing happened, and `GROUP BY` cannot invent one. The result is short by exactly the rows that matter to a trend: the quiet days.
+
+The missing rows do damage in four places:
+
+- A chart skips the day, or draws a straight line across it.
+- A window of `6 PRECEDING` rows covers more than seven days.
+- `LAG` returns the previous row that exists, which may be two months back, and reports it as "last month".
+- An average per day divides by the days that had rows, so quiet periods look busier than they were.
+
+The fix is a **spine**: a table with one row for every key the report must show. Left join the facts to it and turn the missing values into zeros.
+
+```sql
+SELECT s.day, COALESCE(f.orders, 0) AS orders
+FROM spine AS s
+LEFT JOIN daily_orders AS f ON f.day = s.day;
+```
+
+For more than one dimension the spine is a cross join: every day times every region.
+
+Where the spine comes from depends on the engine. DuckDB and PostgreSQL have `generate_series`; Snowflake, BigQuery and Spark each have their own generator. A calendar table, a date dimension, works everywhere and also carries weekends and holidays.
+
+Two decisions to say out loud. First, the bounds: take them from the report's period, not from `MIN` and `MAX` of the data, or a quiet first week disappears again. Second, zero or NULL: zero means "we looked and nothing happened", NULL means "we do not know", for example because the sensor was offline. Use `COALESCE` only for the first.
+
+For a comparison with the previous period, you can skip the spine and self-join each period to the period exactly one step earlier.
+'''
+
+asked = [
+  "Daily active users for the last 30 days, including days with none.",
+  "Month-over-month growth by region. What if a region had no sales in a month?",
+  "Why does this seven-day rolling average look too high after a holiday?",
+]
+
+answer = [
+  "State that an aggregate cannot return a group with no rows.",
+  "Build a spine of every expected key, left join the facts and `COALESCE` the measures.",
+  "Take the spine's bounds from the reporting period, not from the data.",
+  "Check every `LAG`, `LEAD` and `ROWS` frame: each one assumes a row per period.",
+  "Distinguish zero (nothing happened) from NULL (not known).",
+]
+
+[[probes]]
+q = "Where do you get the list of days?"
+a = "From a calendar table if the warehouse has one, otherwise from the engine's series generator: `generate_series` in DuckDB and PostgreSQL, and an equivalent in the others. I would not take the distinct dates of the fact table, because those are exactly the days that are not missing."
+
+[[probes]]
+q = "The spine is days times customers. Is that a problem?"
+a = "It can be: a cross join of every day with every customer is far larger than the facts. Limit the spine to the customers in scope and to each customer's active period, or compute on the sparse rows with a join to the exact previous period."
+
+[[probes]]
+q = "Can a RANGE frame replace the spine?"
+a = "For the totals, yes, where the engine supports a `RANGE` frame with an interval: it measures six days back by value. It still returns no row for the empty days, so a chart or a per-day average needs the spine anyway."
+
+[[examples]]
+title = "A week of tickets, with the quiet days"
+setup = '''
+CREATE TABLE tickets (ticket_id INTEGER, opened_on DATE);
+INSERT INTO tickets VALUES
+  (1, '2026-03-02'), (2, '2026-03-02'), (3, '2026-03-02'),
+  (4, '2026-03-03'),
+  (5, '2026-03-06'), (6, '2026-03-06');
+'''
+code = '''
+WITH spine AS (
+  SELECT CAST(d AS DATE) AS day
+  FROM generate_series(TIMESTAMP '2026-03-02', TIMESTAMP '2026-03-08', INTERVAL '1 day') AS g(d)
+), daily AS (
+  SELECT opened_on AS day, COUNT(*) AS opened
+  FROM tickets
+  GROUP BY opened_on
+)
+SELECT s.day, COALESCE(d.opened, 0) AS opened
+FROM spine AS s
+LEFT JOIN daily AS d ON d.day = s.day
+ORDER BY s.day
+'''
+note = "Seven rows for seven days. The GROUP BY on its own returns three."
+
+[[examples]]
+title = "The same week, averaged two ways"
+setup = '''
+CREATE TABLE tickets (ticket_id INTEGER, opened_on DATE);
+INSERT INTO tickets VALUES
+  (1, '2026-03-02'), (2, '2026-03-02'), (3, '2026-03-02'),
+  (4, '2026-03-03'),
+  (5, '2026-03-06'), (6, '2026-03-06');
+'''
+code = '''
+SELECT (SELECT ROUND(AVG(opened), 2)
+        FROM (SELECT COUNT(*) AS opened FROM tickets GROUP BY opened_on) AS daily
+       ) AS avg_over_days_with_rows,
+       ROUND(COUNT(*) / 7.0, 2) AS avg_over_the_week
+FROM tickets
+'''
+note = "Six tickets in a seven-day week is 0.86 a day. Averaging only the three days that have rows reports 2.0."

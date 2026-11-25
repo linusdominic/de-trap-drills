@@ -2,7 +2,7 @@
 
 Notes for the rounds a senior data engineering interview is built from: SQL, Python, data modeling, system design, and the engine and operations questions that come up inside them.
 
-The drills are the part of this repository that is tested: every SQL and Python answer they contain is run by the test suite. This guide is prose. Use it as a checklist of what to be able to say and why, and check anything engine-specific against that engine's documentation before you rely on it.
+The drills are the part of this repository that is tested: every SQL and Python answer they contain is run by the test suite. This guide is prose. The [concept pages](../concepts/) cover the same ground one idea at a time, with examples that are run and the follow-up questions for each, and the [paths](../paths/) put them in order for each round. Use it as a checklist of what to be able to say and why, and check anything engine-specific against that engine's documentation before you rely on it.
 
 1. [SQL](#sql)
 2. [Python](#python)

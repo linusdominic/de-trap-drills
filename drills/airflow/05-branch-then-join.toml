@@ -1,0 +1,72 @@
+title = "After the branch"
+family = "Dependencies"
+pattern = "Trigger rules"
+obvious = "both"
+question = "`full_load` succeeds. Which of `publish` and `audit` run?"
+
+prompt = '''
+A nightly DAG chooses between a full load and an incremental load, then publishes the table. Both loads feed two tasks: `publish`, written the usual way, and `audit`, which was given a trigger rule by someone who had seen this before.
+
+Tonight the branch chooses the full load.
+'''
+
+code = '''
+import pendulum
+from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.sdk import DAG, task
+
+with DAG("nightly_load", schedule=None, start_date=pendulum.datetime(2026, 3, 1, tz="UTC")):
+
+    @task.branch
+    def choose():
+        return "full_load"
+
+    full_load = EmptyOperator(task_id="full_load")
+    incremental_load = EmptyOperator(task_id="incremental_load")
+    publish = EmptyOperator(task_id="publish")
+    audit = EmptyOperator(task_id="audit", trigger_rule="none_failed_min_one_success")
+
+    choose() >> [full_load, incremental_load]
+    [full_load, incremental_load] >> publish
+    [full_load, incremental_load] >> audit
+'''
+
+measure = '''
+states = test_run("nightly_load", "2026-03-05")
+for task_id in ["choose", "full_load", "incremental_load", "publish", "audit"]:
+    print(f"{task_id:18} {states[task_id]}")
+ran = [name for name in ("publish", "audit") if states[name] == "success"]
+answer({("publish", "audit"): "both", ("audit",): "audit", ("publish",): "publish", (): "neither"}[tuple(ran)])
+'''
+
+trap = '''
+A task's default trigger rule is `all_success`: it runs only if **every** upstream task succeeded. A branch works by marking the path it did not choose as skipped. So `incremental_load` is skipped, `publish` has an upstream task that did not succeed, and Airflow skips `publish` as well. A skip cascades down the graph.
+
+The DAG run is marked successful. Nothing failed. The table simply was not published, tonight and on every night the branch goes that way.
+
+`audit` has `none_failed_min_one_success`: run if no upstream task failed and at least one succeeded. That is the rule for a task that joins the arms of a branch.
+'''
+
+scale = '''
+Give the join after a branch an explicit trigger rule, and use `all_done` only for cleanup that must run whatever happened. Because a skipped task is not a failure, alerts on failed runs will not catch this: add a check on the outcome, such as the freshness of the published table. And test the DAG once per branch, looking at the state of every task, not at the state of the run.
+'''
+
+[[options]]
+value = "both"
+text = "Both: the load they depend on succeeded"
+why = "`publish` depends on both loads, and its default rule needs all of them to succeed. The load that was not chosen is skipped."
+
+[[options]]
+value = "audit"
+text = "Only `audit`: `publish` is skipped"
+why = "The skipped `incremental_load` makes `publish` skip under the default `all_success` rule. `audit` asks only that nothing failed and something succeeded."
+
+[[options]]
+value = "publish"
+text = "Only `publish`: the trigger rule on `audit` is not satisfied"
+why = "It is the other way round. `none_failed_min_one_success` is satisfied by one success and one skip; `all_success` is not."
+
+[[options]]
+value = "neither"
+text = "Neither: a skipped upstream task skips everything after it"
+why = "Skips cascade only through tasks whose trigger rule requires all upstream tasks to succeed. `audit` has a rule that tolerates a skip."

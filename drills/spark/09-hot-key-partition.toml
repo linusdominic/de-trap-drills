@@ -1,0 +1,59 @@
+title = "Repartition by customer"
+family = "Partitions"
+pattern = "Skew"
+obvious = "even"
+question = "What share of the 1,000,000 rows is in the largest of the 8 partitions?"
+
+prompt = '''
+Orders are repartitioned by customer before a per-customer computation, so that each customer's rows are together and the work is spread over 8 tasks.
+
+Nine orders in ten are guest checkouts, stored with `customer_id = 0`.
+'''
+
+code = '''
+orders = spark.range(1_000_000).withColumn(
+    "customer_id", F.when(F.col("id") % 10 < 9, F.lit(0)).otherwise(F.col("id"))
+)
+
+by_customer = orders.repartition(8, "customer_id")
+'''
+
+measure = '''
+sizes = [row["count"] for row in by_customer.groupBy(F.spark_partition_id().alias("p")).count().orderBy("p").collect()]
+print("rows per partition:", sizes)
+share = max(sizes) / sum(sizes)
+print(f"largest partition: {share:.0%} of the rows")
+answer("most" if share > 0.85 else "even" if share < 0.2 else "half")
+'''
+
+trap = '''
+Hash partitioning sends every row with the same key to the same partition. It spreads **keys** evenly, not rows. When one key owns 90% of the rows, one partition owns at least 90% of the rows, whatever number of partitions you ask for.
+
+In the Spark UI this is the stage where seven tasks finish in seconds and one runs for an hour, or dies with an out-of-memory error. Raising the partition count or adding executors does not help: the hot key still fits in exactly one task.
+
+Typical hot keys are a NULL, a default or "unknown" id, a guest account, and one very large customer.
+'''
+
+scale = '''
+Find it first: count rows per key and look at the top few. Then choose. Filter the hot key out and process it separately. For a join, let adaptive query execution split skewed partitions, or broadcast the other side so that no shuffle on the key is needed. For an aggregation, salt the key (add a random bucket, aggregate, then aggregate again without it), which only works for aggregates that can be combined in two steps.
+'''
+
+[[options]]
+value = "even"
+text = "About 12%: the rows are spread evenly over 8 partitions"
+why = "Hash partitioning spreads keys, not rows. Every guest order has the same key and so goes to the same partition."
+
+[[options]]
+value = "half"
+text = "About half"
+why = "The guest key alone is 90% of the rows, and all of them hash to one partition."
+
+[[options]]
+value = "most"
+text = "More than 85%: one partition holds the guest orders"
+why = "All rows with `customer_id = 0` hash to the same partition, and they are nine tenths of the table."
+
+[[options]]
+value = "all"
+text = "All of them: `repartition` on a skewed key gives up and uses one partition"
+why = "It still creates 8 partitions. The other customers are spread over them; the guest orders are not."

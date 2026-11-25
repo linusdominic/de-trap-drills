@@ -1,0 +1,60 @@
+title = "How many shuffles in this join?"
+family = "Plans"
+pattern = "Join strategy"
+obvious = "2"
+question = "How many shuffles (`Exchange hashpartitioning`) does the physical plan contain?"
+
+prompt = '''
+A fact table of 5 million rows is joined to a dimension of 1,000 rows on a key. Nothing was configured and no hint was given.
+'''
+
+code = '''
+facts = spark.range(5_000_000).withColumn("city_id", F.col("id") % 1000)
+cities = spark.range(1000).withColumnRenamed("id", "city_id").withColumn("region", F.col("city_id") % 7)
+
+joined = facts.join(cities, "city_id")
+'''
+
+measure = '''
+plan = plan_of(joined)
+shuffles = plan.count("Exchange hashpartitioning")
+print("threshold =", spark.conf.get("spark.sql.autoBroadcastJoinThreshold"))
+print("\n".join(line for line in plan.splitlines() if "Join" in line or "Exchange" in line))
+spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "-1")
+off = plan_of(facts.join(cities, "city_id"))
+print("\nwith the threshold set to -1 (broadcast off):")
+print("\n".join(line for line in off.splitlines() if "Join" in line or "Exchange" in line))
+answer(shuffles)
+'''
+
+trap = '''
+"A join shuffles both sides" describes a sort-merge join. Spark picked something else here. Its size estimate for `cities` is under `spark.sql.autoBroadcastJoinThreshold` (10 MB by default), so it planned a **broadcast hash join**: the small table is collected, sent to every executor as a hash map, and each task of the big table looks its keys up locally. The 5 million rows never move.
+
+The plan says so: `BroadcastHashJoin`, a `BroadcastExchange` on the small side, and no `Exchange hashpartitioning` at all. Turn broadcasting off and the same join becomes a `SortMergeJoin` with a hash exchange on each side.
+
+Read the plan before you explain a join's cost. The strategy depends on size estimates you cannot see in the code.
+'''
+
+scale = '''
+A broadcast join is the cheapest join there is, until the small side is not small. The estimate can be wrong (stale statistics, a filter that keeps more than expected, a UDF that hides the size), and then the driver and every executor try to hold a large table in memory. Raise the threshold or add a `broadcast()` hint only for tables you know stay small, and for two large tables expect a sort-merge join and look at the shuffle sizes and at skew.
+'''
+
+[[options]]
+value = "2"
+text = "2: one for each side of the join"
+why = "That is a sort-merge join. Here the small side is under the broadcast threshold, so Spark broadcasts it and shuffles nothing."
+
+[[options]]
+value = "1"
+text = "1: only the big table is shuffled"
+why = "A hash exchange on one side only does not make matching keys meet. Spark either shuffles both sides or broadcasts one."
+
+[[options]]
+value = "0"
+text = "0: the small table is broadcast"
+why = "The dimension is below the broadcast threshold, so it is sent to every task and the fact table stays where it is."
+
+[[options]]
+value = "3"
+text = "3: both sides, and one more to combine the result"
+why = "A join does not need an exchange after it, and this plan has none before it either."

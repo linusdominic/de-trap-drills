@@ -8,13 +8,15 @@ import re
 import pytest
 
 from trapdrills.cli import check
-from trapdrills.model import FAMILIES, ROOT, Drill, load_drills
+from trapdrills.model import FAMILIES, PREDICT_TRACKS, ROOT, Drill, load_drills
+from trapdrills.predictcheck import check_predict, fingerprint
 from trapdrills.pycheck import run_python
 from trapdrills.sqlcheck import dataset, run_answer
 
 DRILLS = load_drills()
 SQL = [d for d in DRILLS if d.track == "sql"]
 PYTHON = [d for d in DRILLS if d.track == "python"]
+PREDICT = [d for d in DRILLS if d.kind == "predict"]
 
 
 def ids(drills: list[Drill]) -> list[str]:
@@ -24,6 +26,7 @@ def ids(drills: list[Drill]) -> list[str]:
 def test_there_are_drills_in_both_tracks() -> None:
     assert len(SQL) >= 10
     assert len(PYTHON) >= 5
+    assert {d.track for d in PREDICT} == set(PREDICT_TRACKS)
     assert len({d.id for d in DRILLS}) == len(DRILLS)
 
 
@@ -68,6 +71,30 @@ def test_python_cases(drill: Drill) -> None:
     passing = [n.error is None and n.output == r.output for r, n in zip(reference, naive, strict=True)]
     assert any(passing), "the naive answer should get the easy case right"
     assert not all(passing)
+
+
+@pytest.mark.parametrize("drill", PREDICT, ids=ids(PREDICT))
+def test_predict_answer_key_comes_from_the_recorded_run(drill: Drill) -> None:
+    assert drill.evidence is not None
+    # The run on record must be a run of the code that is in the file today.
+    assert drill.evidence.hash == fingerprint(drill), "the drill changed after its run. Run: make engines"
+    assert drill.evidence.output, "the run printed nothing to show as evidence"
+    values = [option.value for option in drill.options]
+    assert len(set(values)) == len(values)
+    assert values.count(drill.reference) == 1, "exactly one option must match what the engine did"
+    assert drill.naive in values, "the obvious answer must be one of the options"
+    assert drill.naive != drill.reference, "the obvious answer has to be wrong"
+    assert "answer(" in drill.measure
+    assert "—" not in drill.question + "".join(option.text + option.why for option in drill.options)
+
+
+@pytest.mark.parametrize("drill", PREDICT, ids=ids(PREDICT))
+def test_predict_accepts_a_letter_or_a_value(drill: Drill) -> None:
+    right = next(i for i, option in enumerate(drill.options) if option.value == drill.reference)
+    assert check_predict(drill, f"# a comment\n{'ABCDEFGH'[right]}\n").passed
+    assert check_predict(drill, "abcdefgh"[right]).passed
+    assert not check_predict(drill, "").passed
+    assert not check_predict(drill, "Z").passed
 
 
 def test_experiments_named_by_drills_exist() -> None:

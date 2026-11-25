@@ -1,0 +1,91 @@
+title = "NULL and three-valued logic"
+area = "SQL correctness"
+level = "core"
+summary = "A comparison with NULL is unknown, not false. WHERE keeps only what is true, so NULLs drop out of filters, joins and NOT IN without an error."
+drills = ["not-in-null", "reconcile-null-and-missing", "scd2-load-null-change"]
+
+idea = '''
+NULL means "unknown". SQL therefore has three truth values: true, false and unknown. Any comparison with NULL, including `NULL = NULL`, is unknown. `WHERE`, `ON` and `HAVING` keep a row only when the condition is true, so unknown behaves like false there. But `NOT unknown` is still unknown, which is where the surprises come from.
+
+What follows from that one rule:
+
+- `x = NULL` is never true. Write `x IS NULL`.
+- `a <> b` does not report a difference when either side is NULL. Write `a IS DISTINCT FROM b`, which treats NULL as a value: two NULLs are the same, NULL and 5 are different. It is standard SQL and works in PostgreSQL, DuckDB, Snowflake, BigQuery and Spark SQL; MySQL spells the null-safe equality `<=>`.
+- `x NOT IN (subquery)` returns no rows at all if the subquery produces a single NULL, because `x <> NULL` is unknown for every `x`. Use `NOT EXISTS`.
+- `WHERE status <> 'closed'` silently drops rows whose status is NULL.
+- A join never matches NULL keys to each other.
+
+Aggregates follow a different rule: they skip NULLs. `COUNT(*)` counts rows and `COUNT(col)` counts non-NULL values. `AVG(col)` divides by the non-NULL count, so NULL is not treated as zero. `SUM` over no rows, or over only NULLs, is NULL, not 0.
+
+`GROUP BY` and `DISTINCT` differ again: they put all NULLs into one group.
+
+Where NULLs sort depends on the engine. If the order matters, write `NULLS FIRST` or `NULLS LAST`.
+
+The habit to build: for every column in a comparison, ask whether it can be NULL and what should happen to those rows. Then make that choice visible in the query.
+'''
+
+asked = [
+  "Customers who have never placed an order.",
+  "Compare these two tables and list the rows that differ.",
+  "Why does this NOT IN query return nothing?",
+  "What is the difference between COUNT(*) and COUNT(column)?",
+]
+
+answer = [
+  "State the rule: a comparison with NULL is unknown, and filters keep only true.",
+  "Use `NOT EXISTS` or an anti-join for exclusion, never `NOT IN` on a nullable column.",
+  "Use `IS DISTINCT FROM` to compare columns that can be NULL.",
+  "Say what each aggregate does with NULL, and that `AVG` does not count it as zero.",
+  "Decide and state what a NULL means in this data: unknown, not applicable, or zero.",
+]
+
+[[probes]]
+q = "Is COALESCE(a, '') <> COALESCE(b, '') a good replacement for IS DISTINCT FROM?"
+a = "Only if the placeholder can never be a real value. With an empty string it reports NULL and '' as equal, which may hide a real change. `IS DISTINCT FROM` has no such collision."
+
+[[probes]]
+q = "You hash all tracked columns to detect changes. What can go wrong with NULLs?"
+a = "Concatenating NULL makes the whole string NULL in many engines, and skipping NULLs makes ('a', NULL) collide with (NULL, 'a'). Convert each column with an explicit NULL marker and put a separator between columns before hashing."
+
+[[probes]]
+q = "Does a unique constraint allow two NULLs?"
+a = "In most engines, yes, because NULL is not equal to NULL. It varies: SQL Server allows only one, and PostgreSQL 15 added `NULLS NOT DISTINCT` to choose. Check the engine before relying on it."
+
+[[probes]]
+q = "The average rating looks high. What would you check?"
+a = "How many rows have no rating. `AVG` ignores them, so the result is the average among customers who answered, not among all customers. Report the response count beside it."
+
+[[examples]]
+title = "What comparisons with NULL return"
+code = '''
+SELECT expression, result
+FROM (
+  SELECT 1 AS n, 'NULL = NULL' AS expression, (NULL = NULL) AS result
+  UNION ALL SELECT 2, 'NULL <> 1', (NULL <> 1)
+  UNION ALL SELECT 3, '1 IN (1, NULL)', (1 IN (1, NULL))
+  UNION ALL SELECT 4, '1 NOT IN (2, NULL)', (1 NOT IN (2, NULL))
+  UNION ALL SELECT 5, 'NULL IS DISTINCT FROM 1', (NULL IS DISTINCT FROM 1)
+  UNION ALL SELECT 6, 'NULL IS NOT DISTINCT FROM NULL', (NULL IS NOT DISTINCT FROM NULL)
+  UNION ALL SELECT 7, 'NULL AND FALSE', (NULL AND FALSE)
+  UNION ALL SELECT 8, 'NULL OR TRUE', (NULL OR TRUE)
+) AS cases
+ORDER BY n
+'''
+note = "`1 NOT IN (2, NULL)` is NULL, not true: that is the whole NOT IN trap. The last two rows show that unknown does not always spread: FALSE wins an AND and TRUE wins an OR."
+
+[[examples]]
+title = "What aggregates do with NULL"
+setup = '''
+CREATE TABLE feedback (ticket_id INTEGER, rating INTEGER);
+INSERT INTO feedback VALUES (1, 5), (2, 4), (3, NULL), (4, NULL), (5, 3);
+'''
+code = '''
+SELECT COUNT(*) AS tickets,
+       COUNT(rating) AS rated,
+       AVG(rating) AS avg_rating,
+       SUM(rating) / COUNT(*) AS sum_over_all_tickets,
+       COUNT(CASE WHEN rating <> 5 THEN 1 END) AS not_five,
+       COUNT(CASE WHEN rating IS DISTINCT FROM 5 THEN 1 END) AS not_five_null_safe
+FROM feedback
+'''
+note = "The average is 4.0 over the three tickets that were rated, not 2.4 over all five. `rating <> 5` finds two rows; the two unrated tickets only appear with IS DISTINCT FROM."

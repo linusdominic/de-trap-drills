@@ -1,0 +1,51 @@
+title = "The SQL round"
+round = "SQL"
+summary = "The traps a SQL interviewer plants in the data: duplicates, fan-out, ties, missing rows and NULLs."
+outcome = "You can state the grain of a query before writing it, choose the right ranking function, and explain why a result is wrong from the rows alone."
+
+[[stages]]
+title = "Before you write anything"
+note = "What to ask and say in the first two minutes of any SQL question."
+steps = ["c:working-the-problem"]
+
+[[stages]]
+title = "Count the right thing"
+note = "Most wrong totals come from rows that repeat. Learn to see the grain, then practise on three tables that hide it."
+steps = [
+  "c:grain-and-fanout",
+  "d:sum-after-dedupe",
+  "d:fanout-join-sum",
+  "c:deduplication",
+  "d:dedupe-latest",
+  "c:additive-measures",
+  "d:avg-of-averages",
+]
+
+[[stages]]
+title = "Rank and compare rows"
+note = "Window functions carry most SQL rounds. The traps are ties, duplicates and boundaries."
+steps = [
+  "c:window-functions",
+  "d:top-n-ties",
+  "c:gaps-and-islands",
+  "d:login-streaks-duplicates",
+  "d:consecutive-months-year-boundary",
+  "d:sessionize-datediff",
+]
+
+[[stages]]
+title = "Rows that are not there"
+note = "A day with no sales has no row. A window, a LAG or a filter will skip it without telling you."
+steps = [
+  "c:missing-rows",
+  "d:rolling-7d-missing-days",
+  "d:mom-growth-missing-month",
+  "c:outer-joins-and-filters",
+  "d:cohort-retention-where-filter",
+  "d:funnel-event-order",
+]
+
+[[stages]]
+title = "NULL is not a value"
+note = "One NULL can empty a result or hide a difference. Two drills where it does."
+steps = ["c:null-logic", "d:not-in-null", "d:reconcile-null-and-missing"]

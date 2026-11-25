@@ -1,0 +1,128 @@
+title = "Parsing and validating messy input"
+area = "Python"
+level = "core"
+summary = "Use a real parser, check every record against explicit rules, and send what fails to a quarantine with a reason and a count."
+drills = ["csv-quoted-commas", "flatten-json", "slowest-endpoints-p95"]
+
+idea = '''
+Input files are written by other people's software. Expect a quoted comma, a line break inside a field, a blank line, a row with too few fields, a stack trace in the middle of a log, a JSON document cut off by a failed write, and a number that is the text `nan`.
+
+**Use a parser, not string splitting.** CSV is a format with quoting rules. `line.split(",")` breaks on the first address that contains a comma, and reading line by line breaks on a field that contains a newline. The `csv` module handles both. For JSON use `json`. For log lines, match the whole line against one anchored pattern and treat anything that does not match as not a log line.
+
+**Validate against explicit rules.** Field count, required fields, types, ranges. Convert types deliberately, and know what the converter accepts: `float("nan")` and `float("inf")` succeed, `int("12.0")` fails, `bool("false")` is `True`.
+
+**Do not crash and do not drop silently.** A job that dies at line 40 million loses a night. A job that skips bad rows without telling anyone is worse. Send each rejected record to a quarantine with its line number and a reason, and report three numbers: read, accepted, rejected. Fail the run when the rejected share passes a threshold you chose.
+
+**Keep three things apart.** A missing key, a key with `null`, and an empty string are different facts. Decide what each means before a default hides the difference.
+
+**Nested data.** Walk dicts and lists with recursion, and decide what happens to empty containers and to keys that collide after flattening.
+
+One more habit: for a file of JSON documents, one per line, parse line by line. One bad line then costs one record, not the file.
+
+Warehouses and Spark have the same choices as reader options: the quote and escape characters, multi-line fields, and a mode for malformed records that keeps, drops or fails.
+'''
+
+asked = [
+  "Validate this CSV against a schema and report the bad rows with reasons.",
+  "Parse these server logs and compute a latency percentile per endpoint.",
+  "Flatten this nested JSON into columns.",
+  "What does your code do with a line it cannot parse?",
+]
+
+answer = [
+  "Ask about the input first: size, encoding, header, quoting, whether lines can be malformed.",
+  "Use the `csv` and `json` modules, or one anchored pattern for log lines.",
+  "Validate field count, required fields and types, in a stated order, and report the first failure per record.",
+  "Quarantine bad records with line number and reason, and count read, accepted and rejected.",
+  "Distinguish missing, null and empty, and handle lists as well as objects in nested data.",
+]
+
+[[probes]]
+q = "Why not line.split(',')?"
+a = "A quoted field may contain commas, doubled quotes and line breaks. Splitting cuts those fields into pieces, so good rows are reported as bad. A validator that rejects good rows teaches people to ignore it."
+
+[[probes]]
+q = "Three percent of the lines are malformed. Does the job succeed?"
+a = "That is a decision to make in advance, not in the except block. I would set a threshold with the data's owner, fail above it, and below it finish the load, write the rejects to a quarantine and alert with the count."
+
+[[probes]]
+q = "After flattening, two different inputs produce the same key. How?"
+a = "A key that already contains the separator: `{\"a.b\": 1}` and `{\"a\": {\"b\": 2}}` both become `a.b`. Escape the separator in keys, pick a separator that cannot occur, or reject the record. Say which."
+
+[[probes]]
+q = "The file has a byte order mark and the first column name looks wrong. What happened?"
+a = "The file was opened without telling Python about the mark, so its bytes became part of the first header name. Open it with the `utf-8-sig` encoding, and declare the encoding on every open instead of relying on the platform default."
+
+[[examples]]
+title = "Splitting on commas against the csv module"
+kind = "python"
+code = '''
+import csv
+import io
+
+text = 'id,name,note\n1,"Rao, Priya","said ""call back"""\n2,Okoro,"line one\nline two"\n'
+
+print("split on commas, line by line:")
+for line in text.splitlines()[1:]:
+    fields = line.split(",")
+    print("  ", len(fields), "fields:", fields)
+
+print("csv module:")
+for row in list(csv.reader(io.StringIO(text)))[1:]:
+    print("  ", len(row), "fields:", row)
+'''
+note = "The file has two data rows of three fields each. Splitting sees three lines with four, three and one fields. The csv module returns the comma, the quotes and the line break as part of the values."
+
+[[examples]]
+title = "Accept, or quarantine with a reason"
+kind = "python"
+code = '''
+import json
+import math
+
+lines = [
+    '{"id": 1, "amount": "19.99", "currency": "EUR"}',
+    '{"id": 2, "amount": "nan", "currency": "EUR"}',
+    '{"id": 3, "currency": "USD"}',
+    '{"id": 4, "amount": "5.00", "curr',
+    '',
+    '{"id": "6", "amount": "7.50", "currency": "USD"}',
+]
+
+
+def problem(record):
+    if not isinstance(record.get("id"), int):
+        return "id is not an integer"
+    if "amount" not in record:
+        return "amount is missing"
+    try:
+        amount = float(record["amount"])
+    except (TypeError, ValueError):
+        return "amount is not a number"
+    if not math.isfinite(amount):
+        return "amount is not finite"
+    return None
+
+
+accepted, quarantine, blank = [], [], 0
+for number, line in enumerate(lines, start=1):
+    if not line.strip():
+        blank += 1
+        continue
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        quarantine.append((number, "not valid JSON"))
+        continue
+    reason = problem(record)
+    if reason:
+        quarantine.append((number, reason))
+    else:
+        accepted.append(record["id"])
+
+print("accepted ids:", accepted)
+for number, reason in quarantine:
+    print(f"quarantined line {number}: {reason}")
+print(f"read {len(lines)}, blank {blank}, accepted {len(accepted)}, rejected {len(quarantine)}")
+'''
+note = "Line 2 would pass a plain `float()` check: \"nan\" converts without an error. The last line is the receipt for the run: every line read is accounted for."
