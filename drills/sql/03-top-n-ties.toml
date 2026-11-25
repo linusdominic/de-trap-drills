@@ -1,0 +1,52 @@
+title = "Top two earnings levels per city"
+family = "Ties"
+pattern = "Top N per group"
+columns = ["city", "driver_id", "earnings"]
+ordered = true
+
+prompt = '''
+Operations pays a bonus to the drivers at the top two earnings *levels* in each city. If several drivers earned the same amount, they are all at that level and all get the bonus.
+
+Return those drivers, ordered by city, then earnings from highest to lowest, then driver_id.
+'''
+
+setup = '''
+CREATE TABLE driver_earnings (city VARCHAR, driver_id INTEGER, earnings INTEGER);
+INSERT INTO driver_earnings VALUES
+  ('Karachi', 1, 900), ('Karachi', 2, 900), ('Karachi', 3, 700), ('Karachi', 4, 650),
+  ('Lahore',  5, 500), ('Lahore',  6, 400), ('Lahore',  7, 400), ('Lahore',  8, 300);
+'''
+
+naive = '''
+SELECT city, driver_id, earnings
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY city ORDER BY earnings DESC) AS rn
+  FROM driver_earnings
+) AS ranked
+WHERE rn <= 2
+ORDER BY city, earnings DESC, driver_id;
+'''
+
+reference = '''
+SELECT city, driver_id, earnings
+FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY city ORDER BY earnings DESC) AS level
+  FROM driver_earnings
+) AS ranked
+WHERE level <= 2
+ORDER BY city, earnings DESC, driver_id;
+'''
+
+trap = '''
+The three ranking functions only differ when values tie, and this data ties on purpose.
+
+- `ROW_NUMBER` gives 1, 2, 3, 4. It picks two rows per city and drops driver 3 in Karachi and one of the tied drivers in Lahore, chosen arbitrarily.
+- `RANK` gives 1, 1, 3, 4. Karachi has no rank 2, so driver 3 is dropped.
+- `DENSE_RANK` gives 1, 1, 2, 3. That is "the top two levels".
+
+In an interview, ask which one the business means before writing anything: "top two drivers" and "top two earnings levels" are different questions.
+'''
+
+scale = '''
+Aggregate to one row per driver before ranking, so the window only sorts drivers, not trips. If only the top few per group are needed from a very large table, filter with `QUALIFY` (Snowflake, BigQuery, DuckDB, Databricks) so the engine can stop early.
+'''

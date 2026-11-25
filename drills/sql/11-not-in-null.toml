@@ -1,0 +1,45 @@
+title = "Customers who never ordered"
+family = "NULLs"
+pattern = "Anti-join"
+columns = ["customer_id"]
+
+prompt = '''
+Marketing wants to email every customer who has never placed an order. Return their ids.
+
+Guest checkouts are stored in `orders` without a customer.
+'''
+
+setup = '''
+CREATE TABLE customers (customer_id INTEGER, name VARCHAR);
+INSERT INTO customers VALUES (1, 'Asha'), (2, 'Bilal'), (3, 'Chen'), (4, 'Dana'), (5, 'Emre');
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);
+INSERT INTO orders VALUES (1, 1, 40), (2, 2, 25), (3, NULL, 60), (4, 2, 15);
+'''
+
+naive = '''
+SELECT customer_id
+FROM customers
+WHERE customer_id NOT IN (SELECT customer_id FROM orders);
+'''
+
+reference = '''
+SELECT c.customer_id
+FROM customers AS c
+WHERE NOT EXISTS (
+  SELECT 1 FROM orders AS o WHERE o.customer_id = c.customer_id
+);
+'''
+
+trap = '''
+The naive query returns no rows at all, and no error.
+
+`x NOT IN (1, 2, NULL)` means `x <> 1 AND x <> 2 AND x <> NULL`. The last comparison is unknown, never true, so the whole condition is never true for any customer. One guest checkout empties the result.
+
+Use `NOT EXISTS`, or a `LEFT JOIN … WHERE o.customer_id IS NULL`. Both treat a NULL as "no match" instead of "unknown".
+
+Filtering the subquery with `WHERE customer_id IS NOT NULL` also works, until someone copies the query without it.
+'''
+
+scale = '''
+`NOT EXISTS` and the left join both plan as an anti-join, which hashes the order keys once. `NOT IN` with a nullable column can force a slower plan in some engines, because the engine has to preserve the NULL behaviour.
+'''

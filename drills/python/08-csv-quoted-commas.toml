@@ -1,0 +1,102 @@
+title = "Validate a CSV file"
+family = "Messy input"
+pattern = "Parsing and validation"
+function = "bad_rows"
+
+prompt = '''
+`text` is the content of a CSV file with the header `loan_id,borrower,city,amount`. Return a list of `[line_number, reason]` for every bad data row, in file order. The header is line 1.
+
+Report the first problem that applies to a row:
+
+1. `"expected 4 fields, got N"`
+2. `"loan_id is not an integer"`
+3. `"borrower is required"`
+4. `"amount is not a number"`
+
+The file was exported from a spreadsheet, so fields that contain a comma or a quote are wrapped in double quotes.
+'''
+
+starter = '''
+def bad_rows(text):
+    ...
+'''
+
+naive = '''
+def check(fields):
+    if len(fields) != 4:
+        return f"expected 4 fields, got {len(fields)}"
+    loan_id, borrower, city, amount = fields
+    if not loan_id.strip().lstrip("-").isdigit():
+        return "loan_id is not an integer"
+    if not borrower.strip():
+        return "borrower is required"
+    try:
+        float(amount)
+    except ValueError:
+        return "amount is not a number"
+    return None
+
+
+def bad_rows(text):
+    bad = []
+    for number, line in enumerate(text.splitlines()[1:], start=2):
+        reason = check(line.split(","))
+        if reason:
+            bad.append([number, reason])
+    return bad
+'''
+
+reference = '''
+import csv
+import io
+
+
+def check(fields):
+    if len(fields) != 4:
+        return f"expected 4 fields, got {len(fields)}"
+    loan_id, borrower, city, amount = fields
+    if not loan_id.strip().lstrip("-").isdigit():
+        return "loan_id is not an integer"
+    if not borrower.strip():
+        return "borrower is required"
+    try:
+        float(amount)
+    except ValueError:
+        return "amount is not a number"
+    return None
+
+
+def bad_rows(text):
+    bad = []
+    reader = csv.reader(io.StringIO(text))
+    next(reader, None)
+    for fields in reader:
+        reason = check(fields)
+        if reason:
+            bad.append([reader.line_num, reason])
+    return bad
+'''
+
+trap = '''
+CSV is not "split on commas". `"Khan, Asha"` is one field with a comma inside it, and `"12 ""B"" Street"` is one field with quotes inside it. `line.split(",")` cuts both into pieces, so perfectly good rows are reported as having five fields.
+
+Use a real CSV parser: the `csv` module in Python, and the engine's CSV reader with explicit quote and escape options in Spark or a warehouse.
+
+The validation rules were never the hard part. Getting the fields right is, and a validator that rejects good rows teaches people to ignore it.
+'''
+
+scale = '''
+A quoted field can also contain a line break, which means a CSV file cannot be split safely at arbitrary newlines for parallel reading. Engines either read such files on one thread (Spark's `multiLine` option) or need the producer to forbid embedded newlines. Prefer Parquet or newline-delimited JSON at the source when you can choose.
+'''
+
+[[cases]]
+name = "plain rows with one bad amount"
+args = '''["loan_id,borrower,city,amount\n1,Asha,Karachi,1000\n2,Bilal,Lahore,abc\n3,,Karachi,500\n"]'''
+
+[[cases]]
+name = "a quoted field with a comma in it"
+args = '''["loan_id,borrower,city,amount\n1,\"Khan, Asha\",Karachi,1000\nx7,Bilal,Lahore,200\n"]'''
+
+[[cases]]
+name = "quotes inside a quoted field, and a short row"
+args = '''["loan_id,borrower,city,amount\n1,Chen,\"12 \"\"B\"\" Street, Karachi\",750\n2,Dana,Lahore\n"]'''

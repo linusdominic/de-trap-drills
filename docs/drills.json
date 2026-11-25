@@ -1,0 +1,2237 @@
+{
+ "version": "0.1.0",
+ "runner": "\"\"\"Run one Python answer against a drill's cases and report each case's output.\n\nThis file is self-contained on purpose (standard library only, no package imports):\nthe CLI runs it in a separate interpreter (python -I -c <this source>) and the site\nruns the same source inside Pyodide, so both check answers with the same code.\n\nCase arguments are JSON. Two wrappers turn a JSON value into something a list is not:\n  {\"$stream\": [...]}        an iterator over the list: one pass, no len(), no indexing\n  {\"$endless\": [start, step]}  a stream that never ends; it raises after ENDLESS_LIMIT\n                               items so a non-lazy answer fails fast instead of hanging\n\"\"\"\n\nimport contextlib\nimport io\nimport itertools\nimport json\nimport sys\n\nENDLESS_LIMIT = 100_000\n\n\ndef _endless(start, step):\n    for n, value in enumerate(itertools.count(start, step)):\n        if n >= ENDLESS_LIMIT:\n            raise RuntimeError(\n                f\"read {ENDLESS_LIMIT} items from a stream that never ends; take items only as you need them\"\n            )\n        yield value\n\n\ndef _build(arg):\n    if isinstance(arg, dict) and len(arg) == 1:\n        if \"$stream\" in arg:\n            return iter(arg[\"$stream\"])\n        if \"$endless\" in arg:\n            return _endless(*arg[\"$endless\"])\n    return arg\n\n\ndef _plain(value):\n    \"\"\"Reduce a result to JSON so two answers can be compared as text.\"\"\"\n    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):\n        return value\n    if isinstance(value, float):\n        return round(value, 6)\n    if isinstance(value, dict):\n        return {str(key): _plain(item) for key, item in value.items()}\n    if isinstance(value, (set, frozenset)):\n        return sorted((_plain(item) for item in value), key=repr)\n    if hasattr(value, \"__iter__\"):\n        return [_plain(item) for item in value]\n    return repr(value)\n\n\ndef run_case(fn, case):\n    try:\n        args = [_build(arg) for arg in json.loads(case[\"args\"])]\n        with contextlib.redirect_stdout(io.StringIO()):\n            value = fn(*args)\n            if case.get(\"take\") is not None:\n                value = list(itertools.islice(iter(value), case[\"take\"]))\n            output = json.dumps(_plain(value), sort_keys=True)\n        return {\"name\": case[\"name\"], \"output\": output, \"error\": None}\n    except (Exception, SystemExit) as exc:\n        return {\"name\": case[\"name\"], \"output\": None, \"error\": f\"{type(exc).__name__}: {exc}\"}\n\n\ndef run_cases(code, function, cases, emit):\n    \"\"\"Call emit(result) once per case, in order.\"\"\"\n    try:\n        namespace = {\"__name__\": \"answer\"}\n        with contextlib.redirect_stdout(io.StringIO()):\n            exec(compile(code, \"answer.py\", \"exec\"), namespace)\n        fn = namespace.get(function)\n        if not callable(fn):\n            raise NameError(f\"define a function called {function}\")\n    except (Exception, SystemExit) as exc:\n        for case in cases:\n            emit({\"name\": case[\"name\"], \"output\": None, \"error\": f\"{type(exc).__name__}: {exc}\"})\n        return\n    for case in cases:\n        emit(run_case(fn, case))\n\n\ndef run_cases_json(code, function, cases_json):\n    \"\"\"The entry point the site calls: JSON in, JSON out.\"\"\"\n    results = []\n    run_cases(code, function, json.loads(cases_json), results.append)\n    return json.dumps(results)\n\n\nif __name__ == \"__main__\":\n    payload = json.loads(sys.stdin.read())\n    out = sys.stdout\n\n    def _emit(result):\n        out.write(json.dumps(result) + \"\\n\")\n        out.flush()\n\n    run_cases(payload[\"code\"], payload[\"function\"], payload[\"cases\"], _emit)\n",
+ "scale": {
+  "date": "2026-11-26",
+  "rows": 100000000,
+  "days": 100,
+  "runs": 5,
+  "duckdb": "2.0.1",
+  "threads": 10,
+  "machine": {
+   "cpu": "Apple M5",
+   "cores": 10,
+   "memory_gb": 16,
+   "os": "Darwin 25.6.0"
+  },
+  "setup": {
+   "write_partitioned_seconds": 7.67,
+   "partitioned_mb": 2072.6,
+   "write_sorted_copy_seconds": 12.51,
+   "sorted_copy_mb": 2082.2,
+   "build_daily_summary_seconds": 0.13,
+   "daily_summary_rows": 5000
+  },
+  "experiments": [
+   {
+    "id": "prune",
+    "title": "Filter so the engine can skip data",
+    "question": "Count and sum the events of one day out of 100.",
+    "same_answer": true,
+    "answer_rows": 1,
+    "answer_first_row": [
+     "1000000",
+     "250419722"
+    ],
+    "variants": [
+     {
+      "name": "text formatting around the column",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE strftime(ts, '%Y-%m-%d') = '2026-02-19'",
+      "comparable": true,
+      "seconds": [
+       0.4485,
+       0.4057,
+       0.4104,
+       0.4281,
+       0.4167
+      ],
+      "median_seconds": 0.4167,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "PROJECTION",
+       "FILTER",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "date_trunc around the column",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE date_trunc('day', ts) = TIMESTAMP '2026-02-19'",
+      "comparable": true,
+      "seconds": [
+       0.0139,
+       0.0126,
+       0.0132,
+       0.0123,
+       0.0139
+      ],
+      "median_seconds": 0.0132,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "half-open range on the raw column",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE ts >= TIMESTAMP '2026-02-19' AND ts < TIMESTAMP '2026-02-20'",
+      "comparable": true,
+      "seconds": [
+       0.012,
+       0.0119,
+       0.0121,
+       0.0121,
+       0.0124
+      ],
+      "median_seconds": 0.0121,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "filter on the partition column",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE event_date = DATE '2026-02-19'",
+      "comparable": true,
+      "seconds": [
+       0.0029,
+       0.0025,
+       0.0025,
+       0.0025,
+       0.0025
+      ],
+      "median_seconds": 0.0025,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "dedupe",
+    "title": "Keep the latest version of each key",
+    "question": "Count the orders and sum their latest amounts (about 1.25 versions per order).",
+    "same_answer": true,
+    "answer_rows": 1,
+    "answer_first_row": [
+     "57084321",
+     "14300883610"
+    ],
+    "variants": [
+     {
+      "name": "ROW_NUMBER ... rn = 1 over all history",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT amount, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY ts DESC) AS rn FROM events) WHERE rn = 1",
+      "comparable": true,
+      "seconds": [
+       2.2768,
+       1.1023,
+       1.1309,
+       1.1701,
+       1.1003
+      ],
+      "median_seconds": 1.1309,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "arg_max ... GROUP BY over all history",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT arg_max(amount, ts) AS amount FROM events GROUP BY order_id)",
+      "comparable": true,
+      "seconds": [
+       1.0717,
+       1.0444,
+       0.9023,
+       0.9643,
+       1.393
+      ],
+      "median_seconds": 1.0444,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "ROW_NUMBER over the newest day only",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT amount, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY ts DESC) AS rn FROM events WHERE event_date = DATE '2026-04-10') WHERE rn = 1",
+      "comparable": false,
+      "seconds": [
+       0.0119,
+       0.0114,
+       0.0112,
+       0.0115,
+       0.011
+      ],
+      "median_seconds": 0.0114,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "shrink",
+    "title": "Aggregate before a dimension join, or after",
+    "question": "Revenue per user segment: events joined to a 2,000,000-row user table.",
+    "same_answer": true,
+    "answer_rows": 20,
+    "answer_first_row": [
+     "0",
+     "1257351616"
+    ],
+    "variants": [
+     {
+      "name": "join, then aggregate",
+      "sql": "SELECT u.segment, SUM(e.amount) FROM events AS e JOIN users AS u USING (user_id) GROUP BY u.segment ORDER BY 1",
+      "comparable": true,
+      "seconds": [
+       0.5406,
+       0.4064,
+       0.4207,
+       0.4057,
+       0.491
+      ],
+      "median_seconds": 0.4207,
+      "operators": [
+       "PROJECTION",
+       "ORDER_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "PERFECT_HASH_GROUP_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_JOIN",
+       "READ_PARQUET",
+       "SEQ_SCAN"
+      ]
+     },
+     {
+      "name": "aggregate per user, then join",
+      "sql": "WITH per_user AS (SELECT user_id, SUM(amount) AS amount FROM events GROUP BY user_id) SELECT u.segment, SUM(p.amount) FROM per_user AS p JOIN users AS u USING (user_id) GROUP BY u.segment ORDER BY 1",
+      "comparable": true,
+      "seconds": [
+       1.2068,
+       0.586,
+       0.5405,
+       0.545,
+       0.5402
+      ],
+      "median_seconds": 0.545,
+      "operators": [
+       "PROJECTION",
+       "ORDER_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "PERFECT_HASH_GROUP_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_JOIN",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "READ_PARQUET",
+       "SEQ_SCAN"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "precompute",
+    "title": "Answer a dashboard from a summary table",
+    "question": "Revenue per day and city for the last 30 days.",
+    "same_answer": true,
+    "answer_rows": 1500,
+    "answer_first_row": [
+     "2026-03-12",
+     "0",
+     "5006914"
+    ],
+    "variants": [
+     {
+      "name": "from the raw events",
+      "sql": "SELECT event_date, city_id, SUM(amount) FROM events WHERE event_date >= DATE '2026-03-12' GROUP BY ALL ORDER BY ALL",
+      "comparable": true,
+      "seconds": [
+       0.0354,
+       0.0342,
+       0.0356,
+       0.034,
+       0.0347
+      ],
+      "median_seconds": 0.0347,
+      "operators": [
+       "ORDER_BY",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "from a daily summary table",
+      "sql": "SELECT event_date, city_id, SUM(revenue) FROM daily_city WHERE event_date >= DATE '2026-03-12' GROUP BY ALL ORDER BY ALL",
+      "comparable": true,
+      "seconds": [
+       0.002,
+       0.0012,
+       0.0012,
+       0.0011,
+       0.0011
+      ],
+      "median_seconds": 0.0012,
+      "operators": [
+       "PROJECTION",
+       "ORDER_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "HASH_GROUP_BY",
+       "PROJECTION",
+       "PROJECTION",
+       "SEQ_SCAN"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "sorted",
+    "title": "Look up one key in sorted and unsorted files",
+    "question": "Count and sum the events of a single user.",
+    "same_answer": true,
+    "answer_rows": 1,
+    "answer_first_row": [
+     "59",
+     "13261"
+    ],
+    "variants": [
+     {
+      "name": "files ordered by time",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE user_id = 1234567",
+      "comparable": true,
+      "seconds": [
+       0.0335,
+       0.0346,
+       0.0339,
+       0.0342,
+       0.0364
+      ],
+      "median_seconds": 0.0342,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     },
+     {
+      "name": "a copy sorted by user_id",
+      "sql": "SELECT COUNT(*), SUM(amount) FROM events_by_user WHERE user_id = 1234567",
+      "comparable": true,
+      "seconds": [
+       0.0113,
+       0.0101,
+       0.0092,
+       0.0091,
+       0.0094
+      ],
+      "median_seconds": 0.0094,
+      "operators": [
+       "UNGROUPED_AGGREGATE",
+       "PROJECTION",
+       "READ_PARQUET"
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "drills": [
+  {
+   "id": "dedupe-latest",
+   "track": "sql",
+   "family": "Duplicates",
+   "pattern": "Dedupe / latest record",
+   "title": "The current state of every order",
+   "prompt": "`orders` is loaded from an append-only change feed. When an order is edited, the source sends the whole row again with a newer `updated_at`. Sometimes it also sends the same row twice.\n\nReturn the current state of every order: one row per order, with its latest amount.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT DISTINCT order_id, customer_id, amount\nFROM orders;\n",
+   "reference": "SELECT order_id, customer_id, amount\nFROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) AS rn\n  FROM orders\n) AS versions\nWHERE rn = 1;\n",
+   "trap": "`DISTINCT` only removes rows that are identical in every selected column. An edited order differs in `amount`, so both versions survive. `MAX(amount)` is no better: order 3 was edited *down* from 80 to 65.\n\nRank the versions of each key by recency and keep the first: `ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC)`, then `rn = 1`.\n\nSay the tie-break out loud. If two versions can share an `updated_at`, the result is not deterministic unless you add a second ordering column, such as the feed's sequence number.\n",
+   "scale": "On a large table, do not re-dedupe all of history on each run. Dedupe only the new partition, then `MERGE` it into a current-state table on the key. In the run below that is the difference between reading 100 million rows and reading 1 million.\n\n`arg_max(amount, updated_at) ... GROUP BY order_id` gets the same answer with a hash aggregate instead of a sort. In DuckDB the two forms took the same time, because the optimizer rewrites `ROW_NUMBER() ... rn = 1` into that aggregate by itself (the plans are on the Scale page). Not every engine does, so read the plan before you claim either one is faster.\n",
+   "experiment": "dedupe",
+   "setup": "CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER, updated_at TIMESTAMP);\nINSERT INTO orders VALUES\n  (1, 10, 100, '2026-03-01 09:00:00'),\n  (1, 10, 120, '2026-03-01 09:30:00'),\n  (2, 11,  50, '2026-03-01 10:00:00'),\n  (3, 12,  80, '2026-03-02 08:00:00'),\n  (3, 12,  80, '2026-03-02 08:00:00'),\n  (3, 12,  65, '2026-03-03 11:15:00'),\n  (4, 10,  20, '2026-03-04 12:00:00');\n",
+   "columns": [
+    "order_id",
+    "customer_id",
+    "amount"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "customer_id",
+      "amount",
+      "updated_at"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "INTEGER",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "10",
+       "100",
+       "2026-03-01 09:00:00"
+      ],
+      [
+       "1",
+       "10",
+       "120",
+       "2026-03-01 09:30:00"
+      ],
+      [
+       "2",
+       "11",
+       "50",
+       "2026-03-01 10:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "80",
+       "2026-03-02 08:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "80",
+       "2026-03-02 08:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "65",
+       "2026-03-03 11:15:00"
+      ],
+      [
+       "4",
+       "10",
+       "20",
+       "2026-03-04 12:00:00"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sum-after-dedupe",
+   "track": "sql",
+   "family": "Duplicates",
+   "pattern": "Aggregate on the right grain",
+   "title": "Revenue per customer",
+   "prompt": "Finance wants total revenue per customer from `orders`.\n\n`orders` is loaded from an append-only change feed, like every table that comes from this source.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT customer_id, SUM(amount) AS revenue\nFROM orders\nGROUP BY customer_id;\n",
+   "reference": "WITH current_orders AS (\n  SELECT order_id, customer_id, amount\n  FROM (\n    SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) AS rn\n    FROM orders\n  ) AS versions\n  WHERE rn = 1\n)\nSELECT customer_id, SUM(amount) AS revenue\nFROM current_orders\nGROUP BY customer_id;\n",
+   "trap": "Nothing in the question says \"deduplicate\". The table does: it holds one row per *version* of an order, not one row per order. Summing it counts order 1 twice and order 3 three times, so customer 10 shows 240 instead of 140.\n\nBefore any aggregate, ask what one row of the table is. If the grain is finer than the thing you are counting, reduce it to the right grain first, then aggregate.\n\nA quick check that finds this in seconds: `SELECT COUNT(*), COUNT(DISTINCT order_id) FROM orders`.\n",
+   "scale": "Put the deduplicated, one-row-per-order table in the warehouse as a model of its own and build every revenue metric on that. Deduplicating inside each report repeats the most expensive step and invites one report to forget it.",
+   "experiment": null,
+   "setup": "CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER, updated_at TIMESTAMP);\nINSERT INTO orders VALUES\n  (1, 10, 100, '2026-03-01 09:00:00'),\n  (1, 10, 120, '2026-03-01 09:30:00'),\n  (2, 11,  50, '2026-03-01 10:00:00'),\n  (3, 12,  80, '2026-03-02 08:00:00'),\n  (3, 12,  80, '2026-03-02 08:00:00'),\n  (3, 12,  65, '2026-03-03 11:15:00'),\n  (4, 10,  20, '2026-03-04 12:00:00');\n",
+   "columns": [
+    "customer_id",
+    "revenue"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "customer_id",
+      "amount",
+      "updated_at"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "INTEGER",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "10",
+       "100",
+       "2026-03-01 09:00:00"
+      ],
+      [
+       "1",
+       "10",
+       "120",
+       "2026-03-01 09:30:00"
+      ],
+      [
+       "2",
+       "11",
+       "50",
+       "2026-03-01 10:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "80",
+       "2026-03-02 08:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "80",
+       "2026-03-02 08:00:00"
+      ],
+      [
+       "3",
+       "12",
+       "65",
+       "2026-03-03 11:15:00"
+      ],
+      [
+       "4",
+       "10",
+       "20",
+       "2026-03-04 12:00:00"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "top-n-ties",
+   "track": "sql",
+   "family": "Ties",
+   "pattern": "Top N per group",
+   "title": "Top two earnings levels per city",
+   "prompt": "Operations pays a bonus to the drivers at the top two earnings *levels* in each city. If several drivers earned the same amount, they are all at that level and all get the bonus.\n\nReturn those drivers, ordered by city, then earnings from highest to lowest, then driver_id.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT city, driver_id, earnings\nFROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY city ORDER BY earnings DESC) AS rn\n  FROM driver_earnings\n) AS ranked\nWHERE rn <= 2\nORDER BY city, earnings DESC, driver_id;\n",
+   "reference": "SELECT city, driver_id, earnings\nFROM (\n  SELECT *, DENSE_RANK() OVER (PARTITION BY city ORDER BY earnings DESC) AS level\n  FROM driver_earnings\n) AS ranked\nWHERE level <= 2\nORDER BY city, earnings DESC, driver_id;\n",
+   "trap": "The three ranking functions only differ when values tie, and this data ties on purpose.\n\n- `ROW_NUMBER` gives 1, 2, 3, 4. It picks two rows per city and drops driver 3 in Karachi and one of the tied drivers in Lahore, chosen arbitrarily.\n- `RANK` gives 1, 1, 3, 4. Karachi has no rank 2, so driver 3 is dropped.\n- `DENSE_RANK` gives 1, 1, 2, 3. That is \"the top two levels\".\n\nIn an interview, ask which one the business means before writing anything: \"top two drivers\" and \"top two earnings levels\" are different questions.\n",
+   "scale": "Aggregate to one row per driver before ranking, so the window only sorts drivers, not trips. If only the top few per group are needed from a very large table, filter with `QUALIFY` (Snowflake, BigQuery, DuckDB, Databricks) so the engine can stop early.",
+   "experiment": null,
+   "setup": "CREATE TABLE driver_earnings (city VARCHAR, driver_id INTEGER, earnings INTEGER);\nINSERT INTO driver_earnings VALUES\n  ('Karachi', 1, 900), ('Karachi', 2, 900), ('Karachi', 3, 700), ('Karachi', 4, 650),\n  ('Lahore',  5, 500), ('Lahore',  6, 400), ('Lahore',  7, 400), ('Lahore',  8, 300);\n",
+   "columns": [
+    "city",
+    "driver_id",
+    "earnings"
+   ],
+   "ordered": true,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "driver_earnings",
+     "columns": [
+      "city",
+      "driver_id",
+      "earnings"
+     ],
+     "types": [
+      "VARCHAR",
+      "INTEGER",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "Karachi",
+       "1",
+       "900"
+      ],
+      [
+       "Karachi",
+       "2",
+       "900"
+      ],
+      [
+       "Karachi",
+       "3",
+       "700"
+      ],
+      [
+       "Karachi",
+       "4",
+       "650"
+      ],
+      [
+       "Lahore",
+       "5",
+       "500"
+      ],
+      [
+       "Lahore",
+       "6",
+       "400"
+      ],
+      [
+       "Lahore",
+       "7",
+       "400"
+      ],
+      [
+       "Lahore",
+       "8",
+       "300"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "rolling-7d-missing-days",
+   "track": "sql",
+   "family": "Missing rows",
+   "pattern": "Rolling metrics",
+   "title": "Seven-day rolling revenue",
+   "prompt": "Build the series behind a dashboard chart: for every day from 2026-03-01 to 2026-03-14, the revenue of that day and the revenue of the seven days ending on it (that day and the six calendar days before it).\n\nA day with no orders has revenue 0 and still appears. Order by day.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT order_date AS day,\n       SUM(amount) AS revenue,\n       SUM(SUM(amount)) OVER (ORDER BY order_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS revenue_7d\nFROM orders\nGROUP BY order_date\nORDER BY day;\n",
+   "reference": "WITH days AS (\n  SELECT CAST(d AS DATE) AS day\n  FROM generate_series(TIMESTAMP '2026-03-01', TIMESTAMP '2026-03-14', INTERVAL '1 day') AS g(d)\n), daily AS (\n  SELECT order_date AS day, SUM(amount) AS revenue\n  FROM orders\n  GROUP BY order_date\n)\nSELECT days.day,\n       COALESCE(daily.revenue, 0) AS revenue,\n       SUM(COALESCE(daily.revenue, 0)) OVER (ORDER BY days.day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS revenue_7d\nFROM days\nLEFT JOIN daily ON daily.day = days.day\nORDER BY days.day;\n",
+   "trap": "`ROWS BETWEEN 6 PRECEDING AND CURRENT ROW` counts *rows*, not days. With no row for 4 to 8 March, the window on 14 March reaches back six rows to 1 March and reports 350 for a \"seven-day\" total that should be 130. The quiet days are also missing from the chart.\n\nBuild a date spine (one row per calendar day), left join the facts to it and turn the gaps into zeros. Then seven rows really are seven days.\n\n`RANGE BETWEEN INTERVAL '6 days' PRECEDING AND CURRENT ROW` fixes the totals without a spine, but the missing days still do not appear.\n",
+   "scale": "Keep a calendar table in the warehouse instead of generating the spine in each query. Compute the rolling window over a daily summary table, not over raw orders: 14 rows per series instead of every order in the range.",
+   "experiment": "precompute",
+   "setup": "CREATE TABLE orders (order_id INTEGER, order_date DATE, amount INTEGER);\nINSERT INTO orders VALUES\n  (1, '2026-03-01', 100),\n  (2, '2026-03-02',  50),\n  (3, '2026-03-03',  70),\n  (4, '2026-03-09',  40),\n  (5, '2026-03-10',  60),\n  (6, '2026-03-14',  30);\n",
+   "columns": [
+    "day",
+    "revenue",
+    "revenue_7d"
+   ],
+   "ordered": true,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "order_date",
+      "amount"
+     ],
+     "types": [
+      "INTEGER",
+      "DATE",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1",
+       "2026-03-01",
+       "100"
+      ],
+      [
+       "2",
+       "2026-03-02",
+       "50"
+      ],
+      [
+       "3",
+       "2026-03-03",
+       "70"
+      ],
+      [
+       "4",
+       "2026-03-09",
+       "40"
+      ],
+      [
+       "5",
+       "2026-03-10",
+       "60"
+      ],
+      [
+       "6",
+       "2026-03-14",
+       "30"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mom-growth-missing-month",
+   "track": "sql",
+   "family": "Missing rows",
+   "pattern": "Period-over-period",
+   "title": "Month-over-month change by region",
+   "prompt": "For each region and each month in which it had sales, return the month's revenue, the revenue of the calendar month immediately before it (`prev_revenue`, 0 if the region sold nothing that month) and the difference (`change`).\n\n`month` is the first day of the month. Order by region, then month.\n",
+   "starter": "-- Write your query here",
+   "naive": "WITH monthly AS (\n  SELECT region, CAST(date_trunc('month', sale_date) AS DATE) AS month, SUM(amount) AS revenue\n  FROM sales\n  GROUP BY 1, 2\n)\nSELECT region, month, revenue,\n       COALESCE(LAG(revenue) OVER (PARTITION BY region ORDER BY month), 0) AS prev_revenue,\n       revenue - COALESCE(LAG(revenue) OVER (PARTITION BY region ORDER BY month), 0) AS change\nFROM monthly\nORDER BY region, month;\n",
+   "reference": "WITH monthly AS (\n  SELECT region, CAST(date_trunc('month', sale_date) AS DATE) AS month, SUM(amount) AS revenue\n  FROM sales\n  GROUP BY 1, 2\n)\nSELECT m.region, m.month, m.revenue,\n       COALESCE(p.revenue, 0) AS prev_revenue,\n       m.revenue - COALESCE(p.revenue, 0) AS change\nFROM monthly AS m\nLEFT JOIN monthly AS p\n  ON p.region = m.region\n AND p.month = CAST(m.month - INTERVAL '1 month' AS DATE)\nORDER BY m.region, m.month;\n",
+   "trap": "`LAG` returns the previous *row*, not the previous month. North sold nothing in March, so for April `LAG` hands back February's 150 and reports a drop of 30. The honest answer is a rise from 0 to 120.\n\nEither join each month to the month exactly one calendar month earlier, as the reference does, or build a spine of every region and month first and then `LAG` is safe.\n\nThe same bug hides in year-over-year numbers: a `LAG(…, 12)` over months is only correct if no month is missing.\n",
+   "scale": "A spine of regions x months is tiny compared with the fact table, so build it from the dimension tables and join the aggregated facts to it. Aggregate to month first: the self-join then runs on one row per region and month.",
+   "experiment": null,
+   "setup": "CREATE TABLE sales (region VARCHAR, sale_date DATE, amount INTEGER);\nINSERT INTO sales VALUES\n  ('North', '2026-01-12', 100),\n  ('North', '2026-02-03', 150),\n  ('North', '2026-04-21', 120),\n  ('South', '2026-01-05',  80),\n  ('South', '2026-02-10',  30),\n  ('South', '2026-02-24',  50),\n  ('South', '2026-03-15',  90),\n  ('South', '2026-04-02',  60);\n",
+   "columns": [
+    "region",
+    "month",
+    "revenue",
+    "prev_revenue",
+    "change"
+   ],
+   "ordered": true,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "sales",
+     "columns": [
+      "region",
+      "sale_date",
+      "amount"
+     ],
+     "types": [
+      "VARCHAR",
+      "DATE",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "North",
+       "2026-01-12",
+       "100"
+      ],
+      [
+       "North",
+       "2026-02-03",
+       "150"
+      ],
+      [
+       "North",
+       "2026-04-21",
+       "120"
+      ],
+      [
+       "South",
+       "2026-01-05",
+       "80"
+      ],
+      [
+       "South",
+       "2026-02-10",
+       "30"
+      ],
+      [
+       "South",
+       "2026-02-24",
+       "50"
+      ],
+      [
+       "South",
+       "2026-03-15",
+       "90"
+      ],
+      [
+       "South",
+       "2026-04-02",
+       "60"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sessionize-datediff",
+   "track": "sql",
+   "family": "Time",
+   "pattern": "Sessionization",
+   "title": "Sessions after 30 minutes of silence",
+   "prompt": "Number each user's sessions, starting at 1. A new session starts when more than 30 minutes have passed since that user's previous event.\n\nReturn every event with its session number, ordered by user_id, then ts.\n",
+   "starter": "-- Write your query here",
+   "naive": "WITH flagged AS (\n  SELECT user_id, ts,\n         CASE WHEN date_diff('minute', LAG(ts) OVER (PARTITION BY user_id ORDER BY ts), ts) > 30\n              THEN 1 ELSE 0 END AS is_new\n  FROM events\n)\nSELECT user_id, ts,\n       1 + SUM(is_new) OVER (PARTITION BY user_id ORDER BY ts) AS session_number\nFROM flagged\nORDER BY user_id, ts;\n",
+   "reference": "WITH flagged AS (\n  SELECT user_id, ts,\n         CASE WHEN ts - LAG(ts) OVER (PARTITION BY user_id ORDER BY ts) > INTERVAL '30 minutes'\n              THEN 1 ELSE 0 END AS is_new\n  FROM events\n)\nSELECT user_id, ts,\n       1 + SUM(is_new) OVER (PARTITION BY user_id ORDER BY ts) AS session_number\nFROM flagged\nORDER BY user_id, ts;\n",
+   "trap": "`DATEDIFF` does not measure elapsed time. In DuckDB, Redshift, Snowflake and SQL Server it counts how many minute *boundaries* were crossed. From 10:20:00 to 10:50:40 that is 30 boundaries, so `> 30` is false, although 30 minutes and 40 seconds have passed and a new session should start.\n\nSubtract the timestamps and compare with an interval, or take the difference in seconds and compare with 1800.\n\nThe shape of the solution is the standard one: flag the first event of each session with `LAG`, then a running `SUM` of the flags numbers the sessions.\n",
+   "scale": "Both window functions partition by user, so the engine has to bring each user's events together and sort them. Sessionize one day's partition at a time and carry the last event time of each open session forward, instead of re-sorting all history. In a stream, this is a session window with a 30-minute gap and a watermark for late events.",
+   "experiment": null,
+   "setup": "CREATE TABLE events (user_id INTEGER, ts TIMESTAMP);\nINSERT INTO events VALUES\n  (1, '2026-03-01 10:00:05'),\n  (1, '2026-03-01 10:20:00'),\n  (1, '2026-03-01 10:50:40'),\n  (1, '2026-03-01 11:00:00'),\n  (1, '2026-03-01 12:00:50'),\n  (1, '2026-03-01 12:31:10'),\n  (2, '2026-03-01 09:00:59'),\n  (2, '2026-03-01 09:30:01');\n",
+   "columns": [
+    "user_id",
+    "ts",
+    "session_number"
+   ],
+   "ordered": true,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "events",
+     "columns": [
+      "user_id",
+      "ts"
+     ],
+     "types": [
+      "INTEGER",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "2026-03-01 10:00:05"
+      ],
+      [
+       "1",
+       "2026-03-01 10:20:00"
+      ],
+      [
+       "1",
+       "2026-03-01 10:50:40"
+      ],
+      [
+       "1",
+       "2026-03-01 11:00:00"
+      ],
+      [
+       "1",
+       "2026-03-01 12:00:50"
+      ],
+      [
+       "1",
+       "2026-03-01 12:31:10"
+      ],
+      [
+       "2",
+       "2026-03-01 09:00:59"
+      ],
+      [
+       "2",
+       "2026-03-01 09:30:01"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "login-streaks-duplicates",
+   "track": "sql",
+   "family": "Duplicates",
+   "pattern": "Gaps and islands",
+   "title": "Longest login streak",
+   "prompt": "For each user, return the length in days of their longest run of consecutive login days.\n\n`logins` has one row per login, and people log in more than once a day.\n",
+   "starter": "-- Write your query here",
+   "naive": "WITH numbered AS (\n  SELECT user_id,\n         CAST(login_at AS DATE)\n           - CAST(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_at) AS INTEGER) AS island\n  FROM logins\n), streaks AS (\n  SELECT user_id, island, COUNT(*) AS days\n  FROM numbered\n  GROUP BY user_id, island\n)\nSELECT user_id, MAX(days) AS longest_streak\nFROM streaks\nGROUP BY user_id;\n",
+   "reference": "WITH days AS (\n  SELECT DISTINCT user_id, CAST(login_at AS DATE) AS login_date\n  FROM logins\n), numbered AS (\n  SELECT user_id,\n         login_date\n           - CAST(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_date) AS INTEGER) AS island\n  FROM days\n), streaks AS (\n  SELECT user_id, island, COUNT(*) AS days\n  FROM numbered\n  GROUP BY user_id, island\n)\nSELECT user_id, MAX(days) AS longest_streak\nFROM streaks\nGROUP BY user_id;\n",
+   "trap": "The gaps-and-islands trick is that `date - ROW_NUMBER()` stays constant while the dates climb by one day per row. A second login on the same day adds a row without moving the date, so the constant shifts and one streak is cut in two. User 1 logged in on 1, 2 and 3 March and gets a streak of 2.\n\nReduce to one row per user and day first (`SELECT DISTINCT user_id, CAST(login_at AS DATE)`), then number the rows.\n\nIt is the same lesson as the revenue drill: fix the grain before the clever part.\n",
+   "scale": "The `DISTINCT` to user-day is the big reduction: do it once, in a daily activity table that many metrics share. The streak logic then runs on at most one row per user per day.",
+   "experiment": null,
+   "setup": "CREATE TABLE logins (user_id INTEGER, login_at TIMESTAMP);\nINSERT INTO logins VALUES\n  (1, '2026-03-01 08:00:00'),\n  (1, '2026-03-02 08:10:00'),\n  (1, '2026-03-02 21:40:00'),\n  (1, '2026-03-03 07:55:00'),\n  (1, '2026-03-07 09:00:00'),\n  (2, '2026-02-20 10:00:00'),\n  (2, '2026-03-03 10:00:00'),\n  (2, '2026-03-04 10:00:00'),\n  (2, '2026-03-04 18:30:00'),\n  (2, '2026-03-05 10:00:00'),\n  (2, '2026-03-06 10:00:00'),\n  (3, '2026-03-10 12:00:00');\n",
+   "columns": [
+    "user_id",
+    "longest_streak"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "logins",
+     "columns": [
+      "user_id",
+      "login_at"
+     ],
+     "types": [
+      "INTEGER",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "2026-03-01 08:00:00"
+      ],
+      [
+       "1",
+       "2026-03-02 08:10:00"
+      ],
+      [
+       "1",
+       "2026-03-02 21:40:00"
+      ],
+      [
+       "1",
+       "2026-03-03 07:55:00"
+      ],
+      [
+       "1",
+       "2026-03-07 09:00:00"
+      ],
+      [
+       "2",
+       "2026-02-20 10:00:00"
+      ],
+      [
+       "2",
+       "2026-03-03 10:00:00"
+      ],
+      [
+       "2",
+       "2026-03-04 10:00:00"
+      ],
+      [
+       "2",
+       "2026-03-04 18:30:00"
+      ],
+      [
+       "2",
+       "2026-03-05 10:00:00"
+      ],
+      [
+       "2",
+       "2026-03-06 10:00:00"
+      ],
+      [
+       "3",
+       "2026-03-10 12:00:00"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "consecutive-months-year-boundary",
+   "track": "sql",
+   "family": "Time",
+   "pattern": "Gaps and islands",
+   "title": "Customers active three months running",
+   "prompt": "Return the customers who placed at least one order in each of three or more consecutive calendar months.",
+   "starter": "-- Write your query here",
+   "naive": "WITH months AS (\n  SELECT DISTINCT customer_id, EXTRACT(month FROM order_date) AS m\n  FROM orders\n), numbered AS (\n  SELECT customer_id, m - ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY m) AS island\n  FROM months\n)\nSELECT customer_id\nFROM numbered\nGROUP BY customer_id, island\nHAVING COUNT(*) >= 3;\n",
+   "reference": "WITH months AS (\n  SELECT DISTINCT customer_id,\n         EXTRACT(year FROM order_date) * 12 + EXTRACT(month FROM order_date) AS m\n  FROM orders\n), numbered AS (\n  SELECT customer_id, m - ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY m) AS island\n  FROM months\n)\nSELECT DISTINCT customer_id\nFROM numbered\nGROUP BY customer_id, island\nHAVING COUNT(*) >= 3;\n",
+   "trap": "A month number on its own forgets the year, and that breaks the answer in both directions.\n\n- Customer 1 ordered in November, December and January. As month numbers that is 11, 12, 1, which is not a run, so a real streak is missed.\n- Customer 4 ordered in March 2025, then April and May 2026. As month numbers that is 3, 4, 5, so a streak is reported that never happened.\n\nUse a number that keeps climbing across years, such as `year * 12 + month`, or truncate the date to the month and count months between rows.\n\nThe same mistake appears with week numbers (week 52 to week 1) and with day-of-year.\n",
+   "scale": "Reduce to one row per customer and month before the window function. That table is small and reusable; most retention and streak questions can start from it.",
+   "experiment": null,
+   "setup": "CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE);\nINSERT INTO orders VALUES\n  (1, 1, '2025-11-10'), (2, 1, '2025-12-05'), (3, 1, '2026-01-20'),\n  (4, 2, '2026-01-03'), (5, 2, '2026-02-14'), (6, 2, '2026-02-20'), (7, 2, '2026-04-01'),\n  (8, 3, '2026-02-01'), (9, 3, '2026-03-15'), (10, 3, '2026-04-30'),\n  (11, 4, '2025-03-10'), (12, 4, '2026-04-10'), (13, 4, '2026-05-10');\n",
+   "columns": [
+    "customer_id"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "customer_id",
+      "order_date"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "DATE"
+     ],
+     "rows": [
+      [
+       "1",
+       "1",
+       "2025-11-10"
+      ],
+      [
+       "2",
+       "1",
+       "2025-12-05"
+      ],
+      [
+       "3",
+       "1",
+       "2026-01-20"
+      ],
+      [
+       "4",
+       "2",
+       "2026-01-03"
+      ],
+      [
+       "5",
+       "2",
+       "2026-02-14"
+      ],
+      [
+       "6",
+       "2",
+       "2026-02-20"
+      ],
+      [
+       "7",
+       "2",
+       "2026-04-01"
+      ],
+      [
+       "8",
+       "3",
+       "2026-02-01"
+      ],
+      [
+       "9",
+       "3",
+       "2026-03-15"
+      ],
+      [
+       "10",
+       "3",
+       "2026-04-30"
+      ],
+      [
+       "11",
+       "4",
+       "2025-03-10"
+      ],
+      [
+       "12",
+       "4",
+       "2026-04-10"
+      ],
+      [
+       "13",
+       "4",
+       "2026-05-10"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "cohort-retention-where-filter",
+   "track": "sql",
+   "family": "Missing rows",
+   "pattern": "Retention",
+   "title": "Seven-day repeat rate by cohort",
+   "prompt": "A user's cohort is the date of their first order. For each cohort, return the number of users in it and how many of them ordered again on a later day, within 7 days of the first order.\n\nEvery cohort must appear, including one where nobody came back.\n",
+   "starter": "-- Write your query here",
+   "naive": "WITH firsts AS (\n  SELECT user_id, MIN(order_date) AS first_date\n  FROM orders\n  GROUP BY user_id\n)\nSELECT f.first_date AS cohort,\n       COUNT(DISTINCT f.user_id) AS users,\n       COUNT(DISTINCT o.user_id) AS returned_7d\nFROM firsts AS f\nLEFT JOIN orders AS o ON o.user_id = f.user_id\nWHERE o.order_date > f.first_date\n  AND o.order_date <= f.first_date + INTERVAL '7 days'\nGROUP BY f.first_date;\n",
+   "reference": "WITH firsts AS (\n  SELECT user_id, MIN(order_date) AS first_date\n  FROM orders\n  GROUP BY user_id\n)\nSELECT f.first_date AS cohort,\n       COUNT(DISTINCT f.user_id) AS users,\n       COUNT(DISTINCT o.user_id) AS returned_7d\nFROM firsts AS f\nLEFT JOIN orders AS o\n  ON o.user_id = f.user_id\n AND o.order_date > f.first_date\n AND o.order_date <= f.first_date + INTERVAL '7 days'\nGROUP BY f.first_date;\n",
+   "trap": "A condition on the right-hand table in `WHERE` turns a `LEFT JOIN` into an inner join. Users who never came back have `NULL` in `o.order_date`, the comparison is not true, and the row is removed. The denominator shrinks to the users who returned, so every cohort shows 100% retention, and the cohort of 4 March disappears.\n\nPut the condition in the `ON` clause, or keep the join open and count with `COUNT(DISTINCT CASE WHEN … THEN o.user_id END)`.\n\nTwo smaller choices to say out loud: \"again\" means a later day here, so user 5's second order on the same day does not count; and the window is inclusive of day 7.\n",
+   "scale": "Compute each user's first order date once and store it on the user dimension. The retention query then joins orders to a small table on the user key, and the date conditions can use the partition column of the orders table.",
+   "experiment": null,
+   "setup": "CREATE TABLE orders (order_id INTEGER, user_id INTEGER, order_date DATE);\nINSERT INTO orders VALUES\n  (1, 1, '2026-03-01'), (2, 1, '2026-03-03'), (3, 1, '2026-03-05'),\n  (4, 2, '2026-03-01'), (5, 2, '2026-03-20'),\n  (6, 3, '2026-03-02'),\n  (7, 4, '2026-03-02'), (8, 4, '2026-03-09'),\n  (9, 5, '2026-03-04'), (10, 5, '2026-03-04');\n",
+   "columns": [
+    "cohort",
+    "users",
+    "returned_7d"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "user_id",
+      "order_date"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "DATE"
+     ],
+     "rows": [
+      [
+       "1",
+       "1",
+       "2026-03-01"
+      ],
+      [
+       "2",
+       "1",
+       "2026-03-03"
+      ],
+      [
+       "3",
+       "1",
+       "2026-03-05"
+      ],
+      [
+       "4",
+       "2",
+       "2026-03-01"
+      ],
+      [
+       "5",
+       "2",
+       "2026-03-20"
+      ],
+      [
+       "6",
+       "3",
+       "2026-03-02"
+      ],
+      [
+       "7",
+       "4",
+       "2026-03-02"
+      ],
+      [
+       "8",
+       "4",
+       "2026-03-09"
+      ],
+      [
+       "9",
+       "5",
+       "2026-03-04"
+      ],
+      [
+       "10",
+       "5",
+       "2026-03-04"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "funnel-event-order",
+   "track": "sql",
+   "family": "Time",
+   "pattern": "Funnels",
+   "title": "Signup to purchase conversion",
+   "prompt": "Return one row: how many users signed up, and how many of those went on to purchase after signing up.\n\nGuests can purchase without an account, and some of them sign up later.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT COUNT(DISTINCT CASE WHEN event = 'signup' THEN user_id END) AS signups,\n       COUNT(DISTINCT CASE WHEN event = 'purchase' THEN user_id END) AS converted\nFROM events;\n",
+   "reference": "WITH signups AS (\n  SELECT user_id, MIN(ts) AS signed_up_at\n  FROM events\n  WHERE event = 'signup'\n  GROUP BY user_id\n)\nSELECT COUNT(DISTINCT s.user_id) AS signups,\n       COUNT(DISTINCT p.user_id) AS converted\nFROM signups AS s\nLEFT JOIN events AS p\n  ON p.user_id = s.user_id\n AND p.event = 'purchase'\n AND p.ts > s.signed_up_at;\n",
+   "trap": "A funnel is ordered: a step only counts if it happened after the step before it, for the same user. Counting each event type separately gives 4 purchasers against 4 signups, a 100% conversion rate. Two of those purchasers never went through the funnel: user 5 never signed up, and user 3 bought as a guest before signing up.\n\nAnchor on the first step (one row per user with the signup time), then join later steps with `ts > signed_up_at`.\n\nUser 4 bought twice, which is why the count is of distinct users, not of joined rows.\n",
+   "scale": "Filter each step to its event type and date partition before joining; the self-join on a full events table is the expensive part. For funnels with many steps, one pass with conditional `MIN(ts)` per user and step, followed by comparisons between the step times, avoids repeated self-joins.",
+   "experiment": null,
+   "setup": "CREATE TABLE events (user_id INTEGER, event VARCHAR, ts TIMESTAMP);\nINSERT INTO events VALUES\n  (1, 'signup',   '2026-03-01 10:00:00'),\n  (1, 'purchase', '2026-03-02 09:00:00'),\n  (2, 'signup',   '2026-03-01 11:00:00'),\n  (3, 'purchase', '2026-02-20 15:00:00'),\n  (3, 'signup',   '2026-03-03 08:00:00'),\n  (4, 'signup',   '2026-03-04 09:00:00'),\n  (4, 'purchase', '2026-03-04 12:00:00'),\n  (4, 'purchase', '2026-03-06 17:00:00'),\n  (5, 'purchase', '2026-03-05 13:00:00');\n",
+   "columns": [
+    "signups",
+    "converted"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "events",
+     "columns": [
+      "user_id",
+      "event",
+      "ts"
+     ],
+     "types": [
+      "INTEGER",
+      "VARCHAR",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "signup",
+       "2026-03-01 10:00:00"
+      ],
+      [
+       "1",
+       "purchase",
+       "2026-03-02 09:00:00"
+      ],
+      [
+       "2",
+       "signup",
+       "2026-03-01 11:00:00"
+      ],
+      [
+       "3",
+       "purchase",
+       "2026-02-20 15:00:00"
+      ],
+      [
+       "3",
+       "signup",
+       "2026-03-03 08:00:00"
+      ],
+      [
+       "4",
+       "signup",
+       "2026-03-04 09:00:00"
+      ],
+      [
+       "4",
+       "purchase",
+       "2026-03-04 12:00:00"
+      ],
+      [
+       "4",
+       "purchase",
+       "2026-03-06 17:00:00"
+      ],
+      [
+       "5",
+       "purchase",
+       "2026-03-05 13:00:00"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "not-in-null",
+   "track": "sql",
+   "family": "NULLs",
+   "pattern": "Anti-join",
+   "title": "Customers who never ordered",
+   "prompt": "Marketing wants to email every customer who has never placed an order. Return their ids.\n\nGuest checkouts are stored in `orders` without a customer.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT customer_id\nFROM customers\nWHERE customer_id NOT IN (SELECT customer_id FROM orders);\n",
+   "reference": "SELECT c.customer_id\nFROM customers AS c\nWHERE NOT EXISTS (\n  SELECT 1 FROM orders AS o WHERE o.customer_id = c.customer_id\n);\n",
+   "trap": "The naive query returns no rows at all, and no error.\n\n`x NOT IN (1, 2, NULL)` means `x <> 1 AND x <> 2 AND x <> NULL`. The last comparison is unknown, never true, so the whole condition is never true for any customer. One guest checkout empties the result.\n\nUse `NOT EXISTS`, or a `LEFT JOIN … WHERE o.customer_id IS NULL`. Both treat a NULL as \"no match\" instead of \"unknown\".\n\nFiltering the subquery with `WHERE customer_id IS NOT NULL` also works, until someone copies the query without it.\n",
+   "scale": "`NOT EXISTS` and the left join both plan as an anti-join, which hashes the order keys once. `NOT IN` with a nullable column can force a slower plan in some engines, because the engine has to preserve the NULL behaviour.",
+   "experiment": null,
+   "setup": "CREATE TABLE customers (customer_id INTEGER, name VARCHAR);\nINSERT INTO customers VALUES (1, 'Asha'), (2, 'Bilal'), (3, 'Chen'), (4, 'Dana'), (5, 'Emre');\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);\nINSERT INTO orders VALUES (1, 1, 40), (2, 2, 25), (3, NULL, 60), (4, 2, 15);\n",
+   "columns": [
+    "customer_id"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "customers",
+     "columns": [
+      "customer_id",
+      "name"
+     ],
+     "types": [
+      "INTEGER",
+      "VARCHAR"
+     ],
+     "rows": [
+      [
+       "1",
+       "Asha"
+      ],
+      [
+       "2",
+       "Bilal"
+      ],
+      [
+       "3",
+       "Chen"
+      ],
+      [
+       "4",
+       "Dana"
+      ],
+      [
+       "5",
+       "Emre"
+      ]
+     ]
+    },
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "customer_id",
+      "amount"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1",
+       "1",
+       "40"
+      ],
+      [
+       "2",
+       "2",
+       "25"
+      ],
+      [
+       "3",
+       null,
+       "60"
+      ],
+      [
+       "4",
+       "2",
+       "15"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fanout-join-sum",
+   "track": "sql",
+   "family": "Grain",
+   "pattern": "Joining two child tables",
+   "title": "Items and payments per order",
+   "prompt": "For every order, return the number of item lines and the total amount paid. An order with no payments has paid 0.\n\nAn order can have several item lines and several payments (a charge, then a tip).\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT o.order_id,\n       COUNT(i.sku) AS items,\n       COALESCE(SUM(p.amount), 0) AS paid\nFROM orders AS o\nLEFT JOIN order_items AS i ON i.order_id = o.order_id\nLEFT JOIN payments AS p ON p.order_id = o.order_id\nGROUP BY o.order_id;\n",
+   "reference": "WITH items AS (\n  SELECT order_id, COUNT(*) AS items\n  FROM order_items\n  GROUP BY order_id\n), paid AS (\n  SELECT order_id, SUM(amount) AS paid\n  FROM payments\n  GROUP BY order_id\n)\nSELECT o.order_id,\n       COALESCE(items.items, 0) AS items,\n       COALESCE(paid.paid, 0) AS paid\nFROM orders AS o\nLEFT JOIN items ON items.order_id = o.order_id\nLEFT JOIN paid ON paid.order_id = o.order_id;\n",
+   "trap": "Order 1 has 3 item lines and 2 payments. Joining both child tables to the order gives 3 x 2 = 6 rows, so the query counts 6 items and sums each payment three times: 360 paid instead of 120.\n\nTwo tables that are both \"many\" to the same parent must not meet in one join before you aggregate. Bring each child down to one row per order in its own CTE, then join the results, which are all at order grain.\n\n`COUNT(DISTINCT i.sku)` repairs the item count and leaves the money wrong, which is worse: half the report now looks right.\n",
+   "scale": "Here, aggregating each child table first is what makes the answer correct, so speed is not the question.\n\nFor a join that does not multiply rows, do not assume that aggregating first is faster. In the run below, on one machine, aggregating 100 million events per user before joining them to a 2-million-row user table was slower than joining first: the plan gains a hash aggregate with 2 million groups and saves nothing on the join. On a cluster the trade is different, because aggregating first cuts the rows that are shuffled across the network. Measure on the engine you are asked about.\n",
+   "experiment": "shrink",
+   "setup": "CREATE TABLE orders (order_id INTEGER);\nINSERT INTO orders VALUES (1), (2), (3);\nCREATE TABLE order_items (order_id INTEGER, sku VARCHAR, quantity INTEGER);\nINSERT INTO order_items VALUES\n  (1, 'burger', 2), (1, 'fries', 1), (1, 'cola', 2),\n  (2, 'salad', 1),\n  (3, 'pizza', 1), (3, 'water', 2);\nCREATE TABLE payments (order_id INTEGER, payment_id INTEGER, amount INTEGER);\nINSERT INTO payments VALUES (1, 501, 100), (1, 502, 20), (2, 503, 50);\n",
+   "columns": [
+    "order_id",
+    "items",
+    "paid"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "orders",
+     "columns": [
+      "order_id"
+     ],
+     "types": [
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1"
+      ],
+      [
+       "2"
+      ],
+      [
+       "3"
+      ]
+     ]
+    },
+    {
+     "name": "order_items",
+     "columns": [
+      "order_id",
+      "sku",
+      "quantity"
+     ],
+     "types": [
+      "INTEGER",
+      "VARCHAR",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1",
+       "burger",
+       "2"
+      ],
+      [
+       "1",
+       "fries",
+       "1"
+      ],
+      [
+       "1",
+       "cola",
+       "2"
+      ],
+      [
+       "2",
+       "salad",
+       "1"
+      ],
+      [
+       "3",
+       "pizza",
+       "1"
+      ],
+      [
+       "3",
+       "water",
+       "2"
+      ]
+     ]
+    },
+    {
+     "name": "payments",
+     "columns": [
+      "order_id",
+      "payment_id",
+      "amount"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1",
+       "501",
+       "100"
+      ],
+      [
+       "1",
+       "502",
+       "20"
+      ],
+      [
+       "2",
+       "503",
+       "50"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "avg-of-averages",
+   "track": "sql",
+   "family": "Grain",
+   "pattern": "Re-aggregating a summary table",
+   "title": "Average order value from a daily summary",
+   "prompt": "The raw orders are archived. All you have is `daily_city_orders`: one row per city and day, with the number of orders and that day's average order value.\n\nReturn each city's average order value over the whole period.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT city, AVG(avg_order_value) AS avg_order_value\nFROM daily_city_orders\nGROUP BY city;\n",
+   "reference": "SELECT city,\n       SUM(orders * avg_order_value) / SUM(orders) AS avg_order_value\nFROM daily_city_orders\nGROUP BY city;\n",
+   "trap": "An average of averages gives every day the same weight, whatever its volume. Karachi had 100 orders averaging 20 and then a single order of 200. The naive query reports 110. The real average over the 101 orders is 2,200 / 101, about 21.78.\n\nRebuild the numerator and the denominator and divide once at the end: `SUM(orders * avg_order_value) / SUM(orders)`.\n\nLahore comes out the same either way, because its two days have equal volume. That is why this bug survives testing: it only shows when the weights differ.\n",
+   "scale": "This is the reason summary tables should store additive measures (order count, revenue sum) and leave ratios to query time. Sums can be re-aggregated to any level; averages, medians and distinct counts cannot.",
+   "experiment": null,
+   "setup": "CREATE TABLE daily_city_orders (day DATE, city VARCHAR, orders INTEGER, avg_order_value DOUBLE);\nINSERT INTO daily_city_orders VALUES\n  ('2026-03-01', 'Karachi', 100,  20.0),\n  ('2026-03-02', 'Karachi',   1, 200.0),\n  ('2026-03-01', 'Lahore',   10,  50.0),\n  ('2026-03-02', 'Lahore',   10,  70.0);\n",
+   "columns": [
+    "city",
+    "avg_order_value"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "daily_city_orders",
+     "columns": [
+      "day",
+      "city",
+      "orders",
+      "avg_order_value"
+     ],
+     "types": [
+      "DATE",
+      "VARCHAR",
+      "INTEGER",
+      "DOUBLE"
+     ],
+     "rows": [
+      [
+       "2026-03-01",
+       "Karachi",
+       "100",
+       "20.0"
+      ],
+      [
+       "2026-03-02",
+       "Karachi",
+       "1",
+       "200.0"
+      ],
+      [
+       "2026-03-01",
+       "Lahore",
+       "10",
+       "50.0"
+      ],
+      [
+       "2026-03-02",
+       "Lahore",
+       "10",
+       "70.0"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "local-day-boundary",
+   "track": "sql",
+   "family": "Time",
+   "pattern": "Time zones and day boundaries",
+   "title": "Orders per local day",
+   "prompt": "City managers want orders per day, where \"day\" is the calendar day in their own city.\n\n`ordered_at` is stored in UTC. `cities.utc_offset_hours` is the city's offset from UTC.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT city, CAST(ordered_at AS DATE) AS local_day, COUNT(*) AS orders\nFROM orders\nGROUP BY city, CAST(ordered_at AS DATE);\n",
+   "reference": "SELECT o.city,\n       CAST(o.ordered_at + c.utc_offset_hours * INTERVAL '1 hour' AS DATE) AS local_day,\n       COUNT(*) AS orders\nFROM orders AS o\nJOIN cities AS c ON c.city = o.city\nGROUP BY 1, 2;\n",
+   "trap": "Casting a UTC timestamp to a date gives the UTC day. An order placed in Karachi at 00:30 on 2 March was stored as 19:30 UTC on 1 March, so it lands on the wrong day; a late-evening order in New York moves the other way. London is unaffected, which is why this passes a test written in a UTC office.\n\nShift to local time first, then take the date.\n\nThis drill uses fixed offsets so that it runs anywhere. In production, store the IANA zone name and convert with `AT TIME ZONE 'Asia/Karachi'`: New York's offset is -4 for part of the year, and a fixed number is wrong on those days.\n",
+   "scale": "Store the local date as a column when the row is written, next to the UTC timestamp, and partition or cluster on it. A filter on a computed expression such as `CAST(ts + offset AS DATE)` cannot use partition pruning; a filter on a stored `local_date` column can.",
+   "experiment": null,
+   "setup": "CREATE TABLE cities (city VARCHAR, utc_offset_hours INTEGER);\nINSERT INTO cities VALUES ('Karachi', 5), ('New York', -5), ('London', 0);\nCREATE TABLE orders (order_id INTEGER, city VARCHAR, ordered_at TIMESTAMP);\nINSERT INTO orders VALUES\n  (1, 'Karachi',  '2026-03-01 18:30:00'),\n  (2, 'Karachi',  '2026-03-01 19:30:00'),\n  (3, 'Karachi',  '2026-03-01 20:10:00'),\n  (4, 'New York', '2026-03-02 03:00:00'),\n  (5, 'New York', '2026-03-02 15:00:00'),\n  (6, 'London',   '2026-03-01 12:00:00');\n",
+   "columns": [
+    "city",
+    "local_day",
+    "orders"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "cities",
+     "columns": [
+      "city",
+      "utc_offset_hours"
+     ],
+     "types": [
+      "VARCHAR",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "Karachi",
+       "5"
+      ],
+      [
+       "New York",
+       "-5"
+      ],
+      [
+       "London",
+       "0"
+      ]
+     ]
+    },
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "city",
+      "ordered_at"
+     ],
+     "types": [
+      "INTEGER",
+      "VARCHAR",
+      "TIMESTAMP"
+     ],
+     "rows": [
+      [
+       "1",
+       "Karachi",
+       "2026-03-01 18:30:00"
+      ],
+      [
+       "2",
+       "Karachi",
+       "2026-03-01 19:30:00"
+      ],
+      [
+       "3",
+       "Karachi",
+       "2026-03-01 20:10:00"
+      ],
+      [
+       "4",
+       "New York",
+       "2026-03-02 03:00:00"
+      ],
+      [
+       "5",
+       "New York",
+       "2026-03-02 15:00:00"
+      ],
+      [
+       "6",
+       "London",
+       "2026-03-01 12:00:00"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "between-timestamp-end",
+   "track": "sql",
+   "family": "Time",
+   "pattern": "Date range filters",
+   "title": "Revenue for March",
+   "prompt": "Return one row: total revenue from payments made in March 2026.",
+   "starter": "-- Write your query here",
+   "naive": "SELECT SUM(amount) AS revenue\nFROM payments\nWHERE paid_at BETWEEN '2026-03-01' AND '2026-03-31';\n",
+   "reference": "SELECT SUM(amount) AS revenue\nFROM payments\nWHERE paid_at >= TIMESTAMP '2026-03-01'\n  AND paid_at <  TIMESTAMP '2026-04-01';\n",
+   "trap": "`'2026-03-31'` compared with a timestamp means midnight at the *start* of 31 March. `BETWEEN` stops there, so the payment at 18:45 that day is left out and March is short by 70. Stretching the range to `'2026-04-01'` is wrong the other way: `BETWEEN` is inclusive, so a payment at exactly midnight on 1 April is counted in March.\n\nUse a half-open range: `>=` the first instant of the period and `<` the first instant of the next. It is correct for dates, timestamps and any precision, and consecutive periods never overlap or leave a gap.\n",
+   "scale": "A half-open range on the raw column is also what lets the engine skip data: it can compare the bounds with partition values and file statistics, and read only the files and row groups that can match.\n\nWrapping the column in a function can stop that. In the run below, a filter on `strftime(ts, '%Y-%m-%d')` reads every row and is many times slower than the range. DuckDB rewrote `date_trunc('day', ts) = ...` into a range by itself, so that form cost the same; not every engine, or every function, gets that treatment. Filtering on the partition column is faster again, because whole files are skipped without being opened.\n",
+   "experiment": "prune",
+   "setup": "CREATE TABLE payments (payment_id INTEGER, paid_at TIMESTAMP, amount INTEGER);\nINSERT INTO payments VALUES\n  (1, '2026-02-28 23:59:59',  10),\n  (2, '2026-03-01 00:00:00', 100),\n  (3, '2026-03-15 12:00:00',  50),\n  (4, '2026-03-31 00:00:00',  30),\n  (5, '2026-03-31 18:45:00',  70),\n  (6, '2026-04-01 00:00:00', 500);\n",
+   "columns": [
+    "revenue"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "payments",
+     "columns": [
+      "payment_id",
+      "paid_at",
+      "amount"
+     ],
+     "types": [
+      "INTEGER",
+      "TIMESTAMP",
+      "INTEGER"
+     ],
+     "rows": [
+      [
+       "1",
+       "2026-02-28 23:59:59",
+       "10"
+      ],
+      [
+       "2",
+       "2026-03-01 00:00:00",
+       "100"
+      ],
+      [
+       "3",
+       "2026-03-15 12:00:00",
+       "50"
+      ],
+      [
+       "4",
+       "2026-03-31 00:00:00",
+       "30"
+      ],
+      [
+       "5",
+       "2026-03-31 18:45:00",
+       "70"
+      ],
+      [
+       "6",
+       "2026-04-01 00:00:00",
+       "500"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "scd2-as-of-join",
+   "track": "sql",
+   "family": "History",
+   "pattern": "SCD Type 2 as-of join",
+   "title": "The customer's city when they ordered",
+   "prompt": "`dim_customer` keeps history as a Type 2 slowly changing dimension: one row per version of a customer, valid from `valid_from` to `valid_to` inclusive.\n\nReturn every order with the city the customer lived in on the day of the order.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT o.order_id, o.order_date, d.city\nFROM orders AS o\nJOIN dim_customer AS d\n  ON d.customer_id = o.customer_id\n AND d.is_current;\n",
+   "reference": "SELECT o.order_id, o.order_date, d.city\nFROM orders AS o\nJOIN dim_customer AS d\n  ON d.customer_id = o.customer_id\n AND o.order_date BETWEEN d.valid_from AND d.valid_to;\n",
+   "trap": "Joining on `is_current` rewrites history: every past order is shown with today's city. Orders 1 and 2 were placed while the customer lived in Karachi, and the naive query moves them to Lahore. Revenue by city for January changes every time someone moves house.\n\nJoin on the business key and the validity range, so each order picks the version that was true on its own date.\n\nKnow which convention the dimension uses. Here both ends are inclusive, so `BETWEEN` is right and order 2, on the last day of the old version, stays in Karachi. Many dimensions use a half-open range instead (`valid_to` equals the next `valid_from`), and then `BETWEEN` matches two versions on the changeover day and duplicates the order.\n",
+   "scale": "A range join is expensive on large tables. The usual fix is to resolve the surrogate key once, when the fact row is loaded, and store `customer_key` on the fact. Every later query is then an equality join on that key.",
+   "experiment": null,
+   "setup": "CREATE TABLE dim_customer (customer_key INTEGER, customer_id INTEGER, city VARCHAR, valid_from DATE, valid_to DATE, is_current BOOLEAN);\nINSERT INTO dim_customer VALUES\n  (1, 100, 'Karachi',   '2025-01-01', '2026-02-14', FALSE),\n  (2, 100, 'Lahore',    '2026-02-15', '9999-12-31', TRUE),\n  (3, 101, 'Islamabad', '2025-06-01', '9999-12-31', TRUE);\nCREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE);\nINSERT INTO orders VALUES\n  (1, 100, '2026-01-10'),\n  (2, 100, '2026-02-14'),\n  (3, 100, '2026-02-15'),\n  (4, 101, '2026-03-01');\n",
+   "columns": [
+    "order_id",
+    "order_date",
+    "city"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "dim_customer",
+     "columns": [
+      "customer_key",
+      "customer_id",
+      "city",
+      "valid_from",
+      "valid_to",
+      "is_current"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "VARCHAR",
+      "DATE",
+      "DATE",
+      "BOOLEAN"
+     ],
+     "rows": [
+      [
+       "1",
+       "100",
+       "Karachi",
+       "2025-01-01",
+       "2026-02-14",
+       "false"
+      ],
+      [
+       "2",
+       "100",
+       "Lahore",
+       "2026-02-15",
+       "9999-12-31",
+       "true"
+      ],
+      [
+       "3",
+       "101",
+       "Islamabad",
+       "2025-06-01",
+       "9999-12-31",
+       "true"
+      ]
+     ]
+    },
+    {
+     "name": "orders",
+     "columns": [
+      "order_id",
+      "customer_id",
+      "order_date"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "DATE"
+     ],
+     "rows": [
+      [
+       "1",
+       "100",
+       "2026-01-10"
+      ],
+      [
+       "2",
+       "100",
+       "2026-02-14"
+      ],
+      [
+       "3",
+       "100",
+       "2026-02-15"
+      ],
+      [
+       "4",
+       "101",
+       "2026-03-01"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "scd2-load-null-change",
+   "track": "sql",
+   "family": "History",
+   "pattern": "SCD Type 2 load",
+   "title": "Load a Type 2 dimension",
+   "prompt": "Write the statements that apply today's staging table `stg_customer` to `dim_customer`. The batch date is in `batch.load_date`.\n\n- A customer whose city changed: close the current row (`valid_to` = the day before the batch date, `is_current` = FALSE) and insert a new current row from the batch date to 9999-12-31.\n- A new customer: insert a current row.\n- An unchanged customer: leave it alone.\n\nA city can be unknown (NULL) and become known later, or the other way round. Both are changes.\n\nThe check reads `dim_customer` afterwards. Any unique `customer_key` is accepted.\n",
+   "starter": "-- Statement 1: close the current rows that changed\n-- UPDATE dim_customer ...\n\n-- Statement 2: insert new current rows for changed and new customers\n-- INSERT INTO dim_customer ...\n",
+   "naive": "UPDATE dim_customer AS d\nSET valid_to = b.load_date - 1, is_current = FALSE\nFROM stg_customer AS s, batch AS b\nWHERE d.customer_id = s.customer_id\n  AND d.is_current\n  AND d.city <> s.city;\n\nINSERT INTO dim_customer\nSELECT (SELECT MAX(customer_key) FROM dim_customer) + ROW_NUMBER() OVER (ORDER BY s.customer_id),\n       s.customer_id, s.city, b.load_date, DATE '9999-12-31', TRUE\nFROM stg_customer AS s\nCROSS JOIN batch AS b\nLEFT JOIN dim_customer AS d ON d.customer_id = s.customer_id AND d.is_current\nWHERE d.customer_id IS NULL;\n",
+   "reference": "UPDATE dim_customer AS d\nSET valid_to = b.load_date - 1, is_current = FALSE\nFROM stg_customer AS s, batch AS b\nWHERE d.customer_id = s.customer_id\n  AND d.is_current\n  AND d.city IS DISTINCT FROM s.city;\n\nINSERT INTO dim_customer\nSELECT (SELECT COALESCE(MAX(customer_key), 0) FROM dim_customer) + ROW_NUMBER() OVER (ORDER BY s.customer_id),\n       s.customer_id, s.city, b.load_date, DATE '9999-12-31', TRUE\nFROM stg_customer AS s\nCROSS JOIN batch AS b\nLEFT JOIN dim_customer AS d ON d.customer_id = s.customer_id AND d.is_current\nWHERE d.customer_id IS NULL;\n",
+   "trap": "`d.city <> s.city` is unknown, not true, when either side is NULL. Customer 102's city went from unknown to Karachi and customer 104's went from Islamabad to unknown; the naive load closes neither row, so the dimension silently keeps the old values.\n\nCompare with `IS DISTINCT FROM`, which treats NULL as a value: NULL and NULL are the same, NULL and 'Karachi' are different. With many tracked columns, compare one hash of all of them, built so that NULL and the empty string do not collide.\n\nTwo more details in the reference:\n\n- `COALESCE(MAX(customer_key), 0)`: on the very first load the dimension is empty, `MAX` is NULL and every new key would be NULL.\n- The batch date comes from a table, not `CURRENT_DATE`, so a rerun or a backfill for an older date writes the same rows.\n",
+   "scale": "In a warehouse this is one `MERGE` (or a dbt snapshot) instead of two statements, so the close and the insert commit together. Detect changes with a stored hash of the tracked columns: comparing one column per row is far cheaper than comparing thirty.",
+   "experiment": null,
+   "setup": "CREATE TABLE batch (load_date DATE);\nINSERT INTO batch VALUES ('2026-03-10');\nCREATE TABLE dim_customer (customer_key INTEGER, customer_id INTEGER, city VARCHAR, valid_from DATE, valid_to DATE, is_current BOOLEAN);\nINSERT INTO dim_customer VALUES\n  (1, 100, 'Karachi',   '2025-01-01', '9999-12-31', TRUE),\n  (2, 101, 'Lahore',    '2025-01-01', '9999-12-31', TRUE),\n  (3, 102, NULL,        '2025-01-01', '9999-12-31', TRUE),\n  (4, 104, 'Islamabad', '2025-01-01', '9999-12-31', TRUE);\nCREATE TABLE stg_customer (customer_id INTEGER, city VARCHAR);\nINSERT INTO stg_customer VALUES\n  (100, 'Islamabad'),\n  (101, 'Lahore'),\n  (102, 'Karachi'),\n  (103, 'Karachi'),\n  (104, NULL);\n",
+   "columns": [
+    "customer_id",
+    "city",
+    "valid_from",
+    "valid_to",
+    "is_current"
+   ],
+   "ordered": false,
+   "checkQuery": "SELECT customer_id, city, valid_from, valid_to, is_current FROM dim_customer",
+   "tables": [
+    {
+     "name": "batch",
+     "columns": [
+      "load_date"
+     ],
+     "types": [
+      "DATE"
+     ],
+     "rows": [
+      [
+       "2026-03-10"
+      ]
+     ]
+    },
+    {
+     "name": "dim_customer",
+     "columns": [
+      "customer_key",
+      "customer_id",
+      "city",
+      "valid_from",
+      "valid_to",
+      "is_current"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "VARCHAR",
+      "DATE",
+      "DATE",
+      "BOOLEAN"
+     ],
+     "rows": [
+      [
+       "1",
+       "100",
+       "Karachi",
+       "2025-01-01",
+       "9999-12-31",
+       "true"
+      ],
+      [
+       "2",
+       "101",
+       "Lahore",
+       "2025-01-01",
+       "9999-12-31",
+       "true"
+      ],
+      [
+       "3",
+       "102",
+       null,
+       "2025-01-01",
+       "9999-12-31",
+       "true"
+      ],
+      [
+       "4",
+       "104",
+       "Islamabad",
+       "2025-01-01",
+       "9999-12-31",
+       "true"
+      ]
+     ]
+    },
+    {
+     "name": "stg_customer",
+     "columns": [
+      "customer_id",
+      "city"
+     ],
+     "types": [
+      "INTEGER",
+      "VARCHAR"
+     ],
+     "rows": [
+      [
+       "100",
+       "Islamabad"
+      ],
+      [
+       "101",
+       "Lahore"
+      ],
+      [
+       "102",
+       "Karachi"
+      ],
+      [
+       "103",
+       "Karachi"
+      ],
+      [
+       "104",
+       null
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reconcile-null-and-missing",
+   "track": "sql",
+   "family": "NULLs",
+   "pattern": "Reconciliation",
+   "title": "Reconcile the warehouse with the source",
+   "prompt": "`src_loans` is the loan system and `wh_loans` is the warehouse copy. Return every loan that does not reconcile, with one of three issues:\n\n- `missing_in_warehouse`: in the source only\n- `missing_in_source`: in the warehouse only\n- `mismatch`: in both, but `amount` or `status` differs\n\n`amount` and `status` can be NULL in either system. NULL on both sides is a match.\n",
+   "starter": "-- Write your query here",
+   "naive": "SELECT s.loan_id, 'mismatch' AS issue\nFROM src_loans AS s\nJOIN wh_loans AS w ON w.loan_id = s.loan_id\nWHERE s.amount <> w.amount OR s.status <> w.status\nUNION ALL\nSELECT s.loan_id, 'missing_in_warehouse' AS issue\nFROM src_loans AS s\nLEFT JOIN wh_loans AS w ON w.loan_id = s.loan_id\nWHERE w.loan_id IS NULL;\n",
+   "reference": "SELECT COALESCE(s.loan_id, w.loan_id) AS loan_id,\n       CASE WHEN w.loan_id IS NULL THEN 'missing_in_warehouse'\n            WHEN s.loan_id IS NULL THEN 'missing_in_source'\n            ELSE 'mismatch' END AS issue\nFROM src_loans AS s\nFULL OUTER JOIN wh_loans AS w ON w.loan_id = s.loan_id\nWHERE s.loan_id IS NULL\n   OR w.loan_id IS NULL\n   OR s.amount IS DISTINCT FROM w.amount\n   OR s.status IS DISTINCT FROM w.status;\n",
+   "trap": "The naive query looks in one direction and compares with `<>`, and it misses two of the four problems.\n\n- Loan 3 has no status in the source and 'open' in the warehouse. `NULL <> 'open'` is unknown, so the row is not reported. Use `IS DISTINCT FROM`.\n- Loan 6 exists only in the warehouse. A left join from the source can never see it. Use a `FULL OUTER JOIN` so that both sides can be the one with the extra row.\n\nA reconciliation that reports \"no differences\" is only worth something if it would have caught a difference. Test it with a row planted on each side and a NULL planted in each compared column, as this dataset does.\n",
+   "scale": "Do not start with a full outer join of two very large tables. Compare cheap summaries first: row count and a checksum of the compared columns per partition (per day, or per bucket of the key). Only the partitions whose summaries differ need the row-by-row comparison.",
+   "experiment": null,
+   "setup": "CREATE TABLE src_loans (loan_id INTEGER, amount INTEGER, status VARCHAR);\nINSERT INTO src_loans VALUES\n  (1, 1000, 'funded'),\n  (2, 2500, 'funded'),\n  (3,  400, NULL),\n  (4,  900, 'closed'),\n  (5,  700, 'funded'),\n  (7, NULL, 'pending');\nCREATE TABLE wh_loans (loan_id INTEGER, amount INTEGER, status VARCHAR);\nINSERT INTO wh_loans VALUES\n  (1, 1000, 'funded'),\n  (2, 2400, 'funded'),\n  (3,  400, 'open'),\n  (5,  700, 'funded'),\n  (6,  100, 'funded'),\n  (7, NULL, 'pending');\n",
+   "columns": [
+    "loan_id",
+    "issue"
+   ],
+   "ordered": false,
+   "checkQuery": null,
+   "tables": [
+    {
+     "name": "src_loans",
+     "columns": [
+      "loan_id",
+      "amount",
+      "status"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "VARCHAR"
+     ],
+     "rows": [
+      [
+       "1",
+       "1000",
+       "funded"
+      ],
+      [
+       "2",
+       "2500",
+       "funded"
+      ],
+      [
+       "3",
+       "400",
+       null
+      ],
+      [
+       "4",
+       "900",
+       "closed"
+      ],
+      [
+       "5",
+       "700",
+       "funded"
+      ],
+      [
+       "7",
+       null,
+       "pending"
+      ]
+     ]
+    },
+    {
+     "name": "wh_loans",
+     "columns": [
+      "loan_id",
+      "amount",
+      "status"
+     ],
+     "types": [
+      "INTEGER",
+      "INTEGER",
+      "VARCHAR"
+     ],
+     "rows": [
+      [
+       "1",
+       "1000",
+       "funded"
+      ],
+      [
+       "2",
+       "2400",
+       "funded"
+      ],
+      [
+       "3",
+       "400",
+       "open"
+      ],
+      [
+       "5",
+       "700",
+       "funded"
+      ],
+      [
+       "6",
+       "100",
+       "funded"
+      ],
+      [
+       "7",
+       null,
+       "pending"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "second-highest-ties",
+   "track": "python",
+   "family": "Ties",
+   "pattern": "Group and rank",
+   "title": "Second-highest salary per department",
+   "prompt": "`salaries` is a list of `[department, amount]` pairs. Return a dict that maps each department to its second-highest salary *amount*, or `None` if the department has only one distinct amount.\n\nSeveral people can earn the same amount.\n",
+   "starter": "def second_highest(salaries):\n    ...\n",
+   "naive": "def second_highest(salaries):\n    by_dept = {}\n    for dept, amount in salaries:\n        by_dept.setdefault(dept, []).append(amount)\n    return {dept: sorted(amounts, reverse=True)[1] if len(amounts) > 1 else None\n            for dept, amounts in by_dept.items()}\n",
+   "reference": "def second_highest(salaries):\n    by_dept = {}\n    for dept, amount in salaries:\n        by_dept.setdefault(dept, set()).add(amount)\n    return {dept: sorted(amounts, reverse=True)[1] if len(amounts) > 1 else None\n            for dept, amounts in by_dept.items()}\n",
+   "trap": "Two people on the top salary are still one top amount. Sorting the raw list and taking index 1 returns the top salary again whenever it is shared.\n\nCollect the amounts in a set, so that each amount counts once, then take the second.\n\nIt is the Python twin of `ROW_NUMBER` against `DENSE_RANK` in SQL. Ask the interviewer whether \"second-highest\" means the second person or the second amount.\n",
+   "scale": "You do not need to keep every amount. Tracking the two largest distinct amounts per department is constant memory per key and one pass over the input, which matters when the input is a file that does not fit in memory.",
+   "experiment": null,
+   "function": "second_highest",
+   "cases": [
+    {
+     "name": "no ties",
+     "args": "[[[\"data\", 300], [\"data\", 200], [\"data\", 100], [\"ops\", 90], [\"ops\", 80]]]",
+     "take": null
+    },
+    {
+     "name": "two people share the top salary",
+     "args": "[[[\"data\", 300], [\"data\", 300], [\"data\", 200]]]",
+     "take": null
+    },
+    {
+     "name": "everyone earns the same",
+     "args": "[[[\"ops\", 90], [\"ops\", 90]]]",
+     "take": null
+    },
+    {
+     "name": "a department of one",
+     "args": "[[[\"solo\", 50]]]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "tumbling-windows-timezones",
+   "track": "python",
+   "family": "Time",
+   "pattern": "Windowed counts",
+   "title": "Events per tumbling window",
+   "prompt": "Count events per tumbling window. `timestamps` is a list of ISO 8601 strings; each carries its own UTC offset, because the events come from devices in several countries.\n\nReturn a dict that maps each window's start, as a UTC ISO string such as `\"2026-03-01T05:00:00+00:00\"`, to the number of events in it. Windows are `minutes` long and aligned to the UTC clock.\n",
+   "starter": "def tumbling_counts(timestamps, minutes=15):\n    ...\n",
+   "naive": "from collections import Counter\nfrom datetime import datetime\n\n\ndef tumbling_counts(timestamps, minutes=15):\n    counts = Counter()\n    for ts in timestamps:\n        t = datetime.fromisoformat(ts)\n        start = t.replace(minute=t.minute - t.minute % minutes, second=0, microsecond=0)\n        counts[start.isoformat()] += 1\n    return dict(counts)\n",
+   "reference": "from datetime import datetime, timezone\n\n\ndef tumbling_counts(timestamps, minutes=15):\n    size = minutes * 60\n    counts = {}\n    for ts in timestamps:\n        seconds = int(datetime.fromisoformat(ts).timestamp())\n        start = datetime.fromtimestamp(seconds - seconds % size, tz=timezone.utc)\n        key = start.isoformat()\n        counts[key] = counts.get(key, 0) + 1\n    return counts\n",
+   "trap": "`10:07+05:00` and `05:07Z` are the same instant. The naive version buckets by the wall-clock digits in each string, so one moment is counted in two windows with two different labels.\n\nConvert every timestamp to one clock before bucketing. Working in epoch seconds makes the window arithmetic a single modulo.\n\nThe naive version has two more bugs that the cases expose. With 60-minute windows and an offset of +05:30, local hour boundaries are not UTC hour boundaries, so events land in the wrong window, not just under the wrong label. And `t.minute % minutes` only works when the window divides an hour.\n",
+   "scale": "In a stream this is a tumbling event-time window. You also need a watermark that says how late an event may arrive before its window is closed, and a rule for events that arrive after that: drop them, or send them to a late-data output that a batch job corrects.",
+   "experiment": null,
+   "function": "tumbling_counts",
+   "cases": [
+    {
+     "name": "all in UTC",
+     "args": "[[\"2026-03-01T10:07:00+00:00\", \"2026-03-01T10:14:59+00:00\", \"2026-03-01T10:15:00+00:00\"]]",
+     "take": null
+    },
+    {
+     "name": "the same instant written with two offsets",
+     "args": "[[\"2026-03-01T10:07:00+05:00\", \"2026-03-01T05:07:00Z\"]]",
+     "take": null
+    },
+    {
+     "name": "hourly windows and a half-hour offset",
+     "args": "[[\"2026-03-01T10:20:00+05:30\", \"2026-03-01T10:40:00+05:30\", \"2026-03-01T05:05:00+00:00\"], 60]",
+     "take": null
+    },
+    {
+     "name": "90-minute windows",
+     "args": "[[\"2026-03-01T01:40:00+00:00\", \"2026-03-01T02:50:00+00:00\", \"2026-03-01T03:10:00+00:00\"], 90]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "latest-by-key-late-arrival",
+   "track": "python",
+   "family": "Streams",
+   "pattern": "Dedupe / latest record",
+   "title": "Latest record per key from a stream",
+   "prompt": "`records` is a stream of dicts with `id`, `updated_at` (an integer version time) and `status`. Return a list with the latest version of each id, sorted by id.\n\nThe stream can only be read once, and records do not always arrive in order. If two versions of an id have the same `updated_at`, keep the one that arrived first.\n",
+   "starter": "def latest_by_key(records):\n    ...\n",
+   "naive": "def latest_by_key(records):\n    latest = {}\n    for record in records:\n        latest[record[\"id\"]] = record\n    return sorted(latest.values(), key=lambda r: r[\"id\"])\n",
+   "reference": "def latest_by_key(records):\n    latest = {}\n    for record in records:\n        seen = latest.get(record[\"id\"])\n        if seen is None or record[\"updated_at\"] > seen[\"updated_at\"]:\n            latest[record[\"id\"]] = record\n    return sorted(latest.values(), key=lambda r: r[\"id\"])\n",
+   "trap": "\"Last one seen wins\" is only right if the stream is ordered. A retried or delayed message delivers an old version after a newer one, and the naive code overwrites the newer record with it.\n\nCompare versions, not arrival order: replace the stored record only when the incoming `updated_at` is greater.\n\nThe tie rule matters too. With `>` the first arrival of a version is kept; with `>=` the last is. Either can be right, so ask, then make it deliberate.\n",
+   "scale": "Memory is one record per distinct key, not one per input row; say that when asked about a 100 GB file. If the keys themselves do not fit in memory, partition the input by a hash of the key and process one partition at a time, or sort by key and version and keep the last row of each group. In Spark this is a `row_number()` window or `max_by` per key.",
+   "experiment": null,
+   "function": "latest_by_key",
+   "cases": [
+    {
+     "name": "versions arrive in order",
+     "args": "[{\"$stream\": [{\"id\": 1, \"updated_at\": 1, \"status\": \"new\"}, {\"id\": 2, \"updated_at\": 1, \"status\": \"new\"}, {\"id\": 1, \"updated_at\": 2, \"status\": \"paid\"}]}]",
+     "take": null
+    },
+    {
+     "name": "an old version arrives late",
+     "args": "[{\"$stream\": [{\"id\": 1, \"updated_at\": 1, \"status\": \"new\"}, {\"id\": 1, \"updated_at\": 3, \"status\": \"shipped\"}, {\"id\": 1, \"updated_at\": 2, \"status\": \"paid\"}]}]",
+     "take": null
+    },
+    {
+     "name": "two versions share a time",
+     "args": "[{\"$stream\": [{\"id\": 7, \"updated_at\": 5, \"status\": \"first\"}, {\"id\": 7, \"updated_at\": 5, \"status\": \"second\"}]}]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "flatten-json",
+   "track": "python",
+   "family": "Messy input",
+   "pattern": "Recursive transforms",
+   "title": "Flatten nested JSON",
+   "prompt": "Flatten a nested JSON object into one level, joining keys with dots.\n\n- A nested object contributes `parent.child` keys.\n- A list contributes its positions: `items.0.sku`, `items.1.sku`.\n- An empty object or empty list is kept as a value, so the key is not lost.\n",
+   "starter": "def flatten(obj):\n    ...\n",
+   "naive": "def flatten(obj, prefix=\"\"):\n    out = {}\n    for key, value in obj.items():\n        path = f\"{prefix}.{key}\" if prefix else key\n        if isinstance(value, dict):\n            out.update(flatten(value, path))\n        else:\n            out[path] = value\n    return out\n",
+   "reference": "def flatten(obj, prefix=\"\"):\n    out = {}\n    items = obj.items() if isinstance(obj, dict) else enumerate(obj)\n    for key, value in items:\n        path = f\"{prefix}.{key}\" if prefix else str(key)\n        if isinstance(value, (dict, list)) and value:\n            out.update(flatten(value, path))\n        else:\n            out[path] = value\n    return out\n",
+   "trap": "Real payloads are not only objects inside objects. The naive version has two gaps:\n\n- A list is stored whole, so `items` stays a nested value and the \"flat\" row still cannot be loaded into columns.\n- An empty object produces no keys at all, so the field vanishes. Downstream, a missing column and an empty value are different facts.\n\nRecurse into lists as well as dicts, and stop at empty containers.\n\nOne question to raise yourself: a key that already contains a dot, such as `{\"a.b\": 1}` next to `{\"a\": {\"b\": 2}}`, collides after flattening. Decide whether to escape, reject or accept it.\n",
+   "scale": "Flattening lists by position gives a different set of columns for every list length. For a table, explode each list into its own child table with the parent key and the position; keep position-based flattening for small, fixed-size arrays.",
+   "experiment": null,
+   "function": "flatten",
+   "cases": [
+    {
+     "name": "objects inside objects",
+     "args": "[{\"id\": 1, \"borrower\": {\"name\": \"Asha\", \"address\": {\"city\": \"Karachi\"}}}]",
+     "take": null
+    },
+    {
+     "name": "a list of objects",
+     "args": "[{\"id\": 2, \"items\": [{\"sku\": \"A\"}, {\"sku\": \"B\"}]}]",
+     "take": null
+    },
+    {
+     "name": "empty containers and nulls",
+     "args": "[{\"id\": 3, \"meta\": {}, \"tags\": [], \"note\": null}]",
+     "take": null
+    },
+    {
+     "name": "a list of scalars inside a list",
+     "args": "[{\"grid\": [[1, 2], [3]]}]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "slowest-endpoints-p95",
+   "track": "python",
+   "family": "Messy input",
+   "pattern": "Log parsing",
+   "title": "Slowest endpoints by p95 latency",
+   "prompt": "Each log line should look like `2026-03-01T10:00:00Z GET /loans/{id}?expand=docs 200 45ms`: time, method, path, status, duration.\n\nReturn `{\"top\": [[endpoint, p95_ms], ...], \"skipped\": n}`.\n\n- An endpoint is the method and the path without its query string, such as `GET /loans/{id}`.\n- p95 is the value at position `ceil(0.95 * n)`, counting from 1, in the endpoint's sorted durations.\n- `top` holds the `k` endpoints with the highest p95, highest first; ties go to the endpoint that sorts first alphabetically.\n- Lines that do not match the format are counted in `skipped`, not parsed.\n",
+   "starter": "def slowest_endpoints(lines, k=2):\n    ...\n",
+   "naive": "import math\n\n\ndef slowest_endpoints(lines, k=2):\n    durations = {}\n    for line in lines:\n        ts, method, path, status, ms = line.split()\n        durations.setdefault(f\"{method} {path}\", []).append(int(ms[:-2]))\n    p95 = {}\n    for endpoint, values in durations.items():\n        values.sort()\n        p95[endpoint] = values[math.ceil(0.95 * len(values)) - 1]\n    top = sorted(p95.items(), key=lambda kv: (-kv[1], kv[0]))[:k]\n    return {\"top\": [list(pair) for pair in top], \"skipped\": 0}\n",
+   "reference": "import re\n\nLINE = re.compile(r\"^(\\S+) ([A-Z]+) (/[^\\s?]*)(\\?\\S*)? (\\d{3}) (\\d+)ms$\")\n\n\ndef slowest_endpoints(lines, k=2):\n    durations = {}\n    skipped = 0\n    for line in lines:\n        match = LINE.match(line.strip())\n        if match is None:\n            skipped += 1\n            continue\n        endpoint = f\"{match[2]} {match[3]}\"\n        durations.setdefault(endpoint, []).append(int(match[6]))\n    p95 = {}\n    for endpoint, values in durations.items():\n        values.sort()\n        rank = -(-95 * len(values) // 100)\n        p95[endpoint] = values[rank - 1]\n    top = sorted(p95.items(), key=lambda kv: (-kv[1], kv[0]))[:k]\n    return {\"top\": [list(pair) for pair in top], \"skipped\": skipped}\n",
+   "trap": "Logs contain lines that are not log lines: a stack trace, a truncated write, a blank line. `line.split()` into five names raises `ValueError` on the first one and the whole job dies at line 40 million.\n\nMatch each line against the expected shape, skip what does not match, and count what you skipped. The count is part of the answer: a job that silently drops 30% of its input is worse than one that crashes.\n\nThe second trap is the grouping key. `/loans/{id}?expand=docs` and `/loans/{id}?expand=notes` are one endpoint; left as they are, each query string becomes its own \"endpoint\" with too few samples to mean anything.\n",
+   "scale": "An exact percentile needs every value for the endpoint. Across billions of lines, use a mergeable sketch (t-digest, or `approx_percentile` in Spark and most warehouses) so that each partition is summarised separately and the summaries are combined. Say that you would trade exactness for that, and by roughly how much.",
+   "experiment": null,
+   "function": "slowest_endpoints",
+   "cases": [
+    {
+     "name": "clean lines",
+     "args": "[[\"2026-03-01T10:00:00Z GET /loans 200 40ms\", \"2026-03-01T10:00:01Z GET /loans 200 60ms\", \"2026-03-01T10:00:02Z POST /leads 201 20ms\", \"2026-03-01T10:00:03Z GET /health 200 2ms\"]]",
+     "take": null
+    },
+    {
+     "name": "a stack trace and a blank line in the log",
+     "args": "[[\"2026-03-01T10:00:00Z GET /loans 200 40ms\", \"Traceback (most recent call last):\", \"\", \"2026-03-01T10:00:02Z POST /leads 201 90ms\", \"2026-03-01T10:00:03Z GET /loans 500 timeout\"]]",
+     "take": null
+    },
+    {
+     "name": "the same endpoint with different query strings",
+     "args": "[[\"2026-03-01T10:00:00Z GET /loans/{id}?expand=docs 200 300ms\", \"2026-03-01T10:00:01Z GET /loans/{id}?expand=notes 200 100ms\", \"2026-03-01T10:00:02Z GET /loans/{id} 200 200ms\", \"2026-03-01T10:00:03Z POST /leads 201 250ms\"], 1]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "merge-sorted-streams",
+   "track": "python",
+   "family": "Streams",
+   "pattern": "Lazy iteration",
+   "title": "Merge two sorted streams",
+   "prompt": "`a` and `b` are streams of numbers, each already in ascending order. Return their merge, in ascending order. When both streams offer the same value, take the one from `a` first.\n\nThe streams are iterators: you can read each one once, you cannot ask for its length, and it may never end. The caller takes as many merged items as it needs.\n",
+   "starter": "def merge_streams(a, b):\n    ...\n",
+   "naive": "def merge_streams(a, b):\n    return sorted(list(a) + list(b))\n",
+   "reference": "def merge_streams(a, b):\n    missing = object()\n    x, y = next(a, missing), next(b, missing)\n    while x is not missing and y is not missing:\n        if x <= y:\n            yield x\n            x = next(a, missing)\n        else:\n            yield y\n            y = next(b, missing)\n    while x is not missing:\n        yield x\n        x = next(a, missing)\n    while y is not missing:\n        yield y\n        y = next(b, missing)\n",
+   "trap": "`sorted(list(a) + list(b))` gives the right answer on every small test, and it reads both inputs to the end before producing anything. On a stream that never ends it never returns; on a 200 GB file it runs out of memory.\n\nHold one item from each stream, yield the smaller, and refill from the stream it came from. Memory is two items whatever the input size, and the first result is available immediately.\n\n`heapq.merge(a, b)` from the standard library does exactly this, for any number of streams. Mention it, then show you can write it.\n",
+   "scale": "This is the merge step of an external sort and of a sort-merge join: sort chunks that fit in memory, write them out, then merge the sorted runs holding only one row per run. It is also why engines can join two huge tables that are already sorted or bucketed on the key without a shuffle.",
+   "experiment": null,
+   "function": "merge_streams",
+   "cases": [
+    {
+     "name": "two short streams",
+     "args": "[{\"$stream\": [1, 4, 9]}, {\"$stream\": [2, 3, 10, 11]}]",
+     "take": null
+    },
+    {
+     "name": "one stream is empty",
+     "args": "[{\"$stream\": []}, {\"$stream\": [5, 6]}]",
+     "take": null
+    },
+    {
+     "name": "equal values",
+     "args": "[{\"$stream\": [1, 2, 2]}, {\"$stream\": [2, 3]}]",
+     "take": null
+    },
+    {
+     "name": "two streams that never end, first 8 items",
+     "args": "[{\"$endless\": [0, 2]}, {\"$endless\": [1, 3]}]",
+     "take": 8
+    }
+   ]
+  },
+  {
+   "id": "reconcile-float-money",
+   "track": "python",
+   "family": "Messy input",
+   "pattern": "Reconciliation",
+   "title": "Reconcile a ledger with a bank file",
+   "prompt": "`ledger` and `bank` are lists of `{\"id\": ..., \"amount\": ...}`. Amounts are in dollars, as each system exported them. Ids are unique within each list.\n\nReturn `{\"missing_in_bank\": [...], \"extra_in_bank\": [...], \"mismatched\": [...]}`, each a sorted list of ids. Two amounts match when they are the same to the cent.\n",
+   "starter": "def reconcile(ledger, bank):\n    ...\n",
+   "naive": "def reconcile(ledger, bank):\n    ours = {row[\"id\"]: row[\"amount\"] for row in ledger}\n    theirs = {row[\"id\"]: row[\"amount\"] for row in bank}\n    return {\n        \"missing_in_bank\": sorted(ours.keys() - theirs.keys()),\n        \"extra_in_bank\": sorted(theirs.keys() - ours.keys()),\n        \"mismatched\": sorted(i for i in ours.keys() & theirs.keys() if ours[i] != theirs[i]),\n    }\n",
+   "reference": "def cents(amount):\n    return round(amount * 100)\n\n\ndef reconcile(ledger, bank):\n    ours = {row[\"id\"]: cents(row[\"amount\"]) for row in ledger}\n    theirs = {row[\"id\"]: cents(row[\"amount\"]) for row in bank}\n    return {\n        \"missing_in_bank\": sorted(ours.keys() - theirs.keys()),\n        \"extra_in_bank\": sorted(theirs.keys() - ours.keys()),\n        \"mismatched\": sorted(i for i in ours.keys() & theirs.keys() if ours[i] != theirs[i]),\n    }\n",
+   "trap": "The ledger computed a fee as `0.1 + 0.2` and exported `0.30000000000000004`. The bank sent `0.3`. They are the same thirty cents and `!=` says they differ, so the report fills with mismatches that nobody can see in either system.\n\nNever compare money as floats. Convert both sides to integer cents (or `Decimal`) and compare those.\n\nThe structure is otherwise the standard reconciliation: build a dict by key for each side, then three set operations give missing, extra and common keys.\n",
+   "scale": "Store money as integer minor units or a fixed-precision decimal from the first table it lands in, so that every later join and sum is exact. For very large reconciliations, compare per-day counts and totals first and only match row by row on the days that disagree.",
+   "experiment": null,
+   "function": "reconcile",
+   "cases": [
+    {
+     "name": "missing, extra and a real mismatch",
+     "args": "[[{\"id\": \"a\", \"amount\": 10.0}, {\"id\": \"b\", \"amount\": 19.99}, {\"id\": \"c\", \"amount\": 5.0}], [{\"id\": \"a\", \"amount\": 10.0}, {\"id\": \"b\", \"amount\": 20.0}, {\"id\": \"d\", \"amount\": 7.5}]]",
+     "take": null
+    },
+    {
+     "name": "0.1 + 0.2 against 0.3",
+     "args": "[[{\"id\": \"fee\", \"amount\": 0.30000000000000004}], [{\"id\": \"fee\", \"amount\": 0.3}]]",
+     "take": null
+    },
+    {
+     "name": "float noise far below a cent",
+     "args": "[[{\"id\": \"x\", \"amount\": 1.15}, {\"id\": \"y\", \"amount\": 19.99}], [{\"id\": \"x\", \"amount\": 1.1500000000000001}, {\"id\": \"y\", \"amount\": 19.990000000000002}]]",
+     "take": null
+    }
+   ]
+  },
+  {
+   "id": "csv-quoted-commas",
+   "track": "python",
+   "family": "Messy input",
+   "pattern": "Parsing and validation",
+   "title": "Validate a CSV file",
+   "prompt": "`text` is the content of a CSV file with the header `loan_id,borrower,city,amount`. Return a list of `[line_number, reason]` for every bad data row, in file order. The header is line 1.\n\nReport the first problem that applies to a row:\n\n1. `\"expected 4 fields, got N\"`\n2. `\"loan_id is not an integer\"`\n3. `\"borrower is required\"`\n4. `\"amount is not a number\"`\n\nThe file was exported from a spreadsheet, so fields that contain a comma or a quote are wrapped in double quotes.\n",
+   "starter": "def bad_rows(text):\n    ...\n",
+   "naive": "def check(fields):\n    if len(fields) != 4:\n        return f\"expected 4 fields, got {len(fields)}\"\n    loan_id, borrower, city, amount = fields\n    if not loan_id.strip().lstrip(\"-\").isdigit():\n        return \"loan_id is not an integer\"\n    if not borrower.strip():\n        return \"borrower is required\"\n    try:\n        float(amount)\n    except ValueError:\n        return \"amount is not a number\"\n    return None\n\n\ndef bad_rows(text):\n    bad = []\n    for number, line in enumerate(text.splitlines()[1:], start=2):\n        reason = check(line.split(\",\"))\n        if reason:\n            bad.append([number, reason])\n    return bad\n",
+   "reference": "import csv\nimport io\n\n\ndef check(fields):\n    if len(fields) != 4:\n        return f\"expected 4 fields, got {len(fields)}\"\n    loan_id, borrower, city, amount = fields\n    if not loan_id.strip().lstrip(\"-\").isdigit():\n        return \"loan_id is not an integer\"\n    if not borrower.strip():\n        return \"borrower is required\"\n    try:\n        float(amount)\n    except ValueError:\n        return \"amount is not a number\"\n    return None\n\n\ndef bad_rows(text):\n    bad = []\n    reader = csv.reader(io.StringIO(text))\n    next(reader, None)\n    for fields in reader:\n        reason = check(fields)\n        if reason:\n            bad.append([reader.line_num, reason])\n    return bad\n",
+   "trap": "CSV is not \"split on commas\". `\"Khan, Asha\"` is one field with a comma inside it, and `\"12 \"\"B\"\" Street\"` is one field with quotes inside it. `line.split(\",\")` cuts both into pieces, so perfectly good rows are reported as having five fields.\n\nUse a real CSV parser: the `csv` module in Python, and the engine's CSV reader with explicit quote and escape options in Spark or a warehouse.\n\nThe validation rules were never the hard part. Getting the fields right is, and a validator that rejects good rows teaches people to ignore it.\n",
+   "scale": "A quoted field can also contain a line break, which means a CSV file cannot be split safely at arbitrary newlines for parallel reading. Engines either read such files on one thread (Spark's `multiLine` option) or need the producer to forbid embedded newlines. Prefer Parquet or newline-delimited JSON at the source when you can choose.",
+   "experiment": null,
+   "function": "bad_rows",
+   "cases": [
+    {
+     "name": "plain rows with one bad amount",
+     "args": "[\"loan_id,borrower,city,amount\\n1,Asha,Karachi,1000\\n2,Bilal,Lahore,abc\\n3,,Karachi,500\\n\"]",
+     "take": null
+    },
+    {
+     "name": "a quoted field with a comma in it",
+     "args": "[\"loan_id,borrower,city,amount\\n1,\\\"Khan, Asha\\\",Karachi,1000\\nx7,Bilal,Lahore,200\\n\"]",
+     "take": null
+    },
+    {
+     "name": "quotes inside a quoted field, and a short row",
+     "args": "[\"loan_id,borrower,city,amount\\n1,Chen,\\\"12 \\\"\\\"B\\\"\\\" Street, Karachi\\\",750\\n2,Dana,Lahore\\n\"]",
+     "take": null
+    }
+   ]
+  }
+ ]
+}

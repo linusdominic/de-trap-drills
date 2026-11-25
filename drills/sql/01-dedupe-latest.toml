@@ -1,0 +1,51 @@
+title = "The current state of every order"
+family = "Duplicates"
+pattern = "Dedupe / latest record"
+columns = ["order_id", "customer_id", "amount"]
+experiment = "dedupe"
+
+prompt = '''
+`orders` is loaded from an append-only change feed. When an order is edited, the source sends the whole row again with a newer `updated_at`. Sometimes it also sends the same row twice.
+
+Return the current state of every order: one row per order, with its latest amount.
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER, updated_at TIMESTAMP);
+INSERT INTO orders VALUES
+  (1, 10, 100, '2026-03-01 09:00:00'),
+  (1, 10, 120, '2026-03-01 09:30:00'),
+  (2, 11,  50, '2026-03-01 10:00:00'),
+  (3, 12,  80, '2026-03-02 08:00:00'),
+  (3, 12,  80, '2026-03-02 08:00:00'),
+  (3, 12,  65, '2026-03-03 11:15:00'),
+  (4, 10,  20, '2026-03-04 12:00:00');
+'''
+
+naive = '''
+SELECT DISTINCT order_id, customer_id, amount
+FROM orders;
+'''
+
+reference = '''
+SELECT order_id, customer_id, amount
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) AS rn
+  FROM orders
+) AS versions
+WHERE rn = 1;
+'''
+
+trap = '''
+`DISTINCT` only removes rows that are identical in every selected column. An edited order differs in `amount`, so both versions survive. `MAX(amount)` is no better: order 3 was edited *down* from 80 to 65.
+
+Rank the versions of each key by recency and keep the first: `ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC)`, then `rn = 1`.
+
+Say the tie-break out loud. If two versions can share an `updated_at`, the result is not deterministic unless you add a second ordering column, such as the feed's sequence number.
+'''
+
+scale = '''
+On a large table, do not re-dedupe all of history on each run. Dedupe only the new partition, then `MERGE` it into a current-state table on the key. In the run below that is the difference between reading 100 million rows and reading 1 million.
+
+`arg_max(amount, updated_at) ... GROUP BY order_id` gets the same answer with a hash aggregate instead of a sort. In DuckDB the two forms took the same time, because the optimizer rewrites `ROW_NUMBER() ... rn = 1` into that aggregate by itself (the plans are on the Scale page). Not every engine does, so read the plan before you claim either one is faster.
+'''

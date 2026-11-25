@@ -1,0 +1,65 @@
+title = "Items and payments per order"
+family = "Grain"
+pattern = "Joining two child tables"
+columns = ["order_id", "items", "paid"]
+experiment = "shrink"
+
+prompt = '''
+For every order, return the number of item lines and the total amount paid. An order with no payments has paid 0.
+
+An order can have several item lines and several payments (a charge, then a tip).
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER);
+INSERT INTO orders VALUES (1), (2), (3);
+CREATE TABLE order_items (order_id INTEGER, sku VARCHAR, quantity INTEGER);
+INSERT INTO order_items VALUES
+  (1, 'burger', 2), (1, 'fries', 1), (1, 'cola', 2),
+  (2, 'salad', 1),
+  (3, 'pizza', 1), (3, 'water', 2);
+CREATE TABLE payments (order_id INTEGER, payment_id INTEGER, amount INTEGER);
+INSERT INTO payments VALUES (1, 501, 100), (1, 502, 20), (2, 503, 50);
+'''
+
+naive = '''
+SELECT o.order_id,
+       COUNT(i.sku) AS items,
+       COALESCE(SUM(p.amount), 0) AS paid
+FROM orders AS o
+LEFT JOIN order_items AS i ON i.order_id = o.order_id
+LEFT JOIN payments AS p ON p.order_id = o.order_id
+GROUP BY o.order_id;
+'''
+
+reference = '''
+WITH items AS (
+  SELECT order_id, COUNT(*) AS items
+  FROM order_items
+  GROUP BY order_id
+), paid AS (
+  SELECT order_id, SUM(amount) AS paid
+  FROM payments
+  GROUP BY order_id
+)
+SELECT o.order_id,
+       COALESCE(items.items, 0) AS items,
+       COALESCE(paid.paid, 0) AS paid
+FROM orders AS o
+LEFT JOIN items ON items.order_id = o.order_id
+LEFT JOIN paid ON paid.order_id = o.order_id;
+'''
+
+trap = '''
+Order 1 has 3 item lines and 2 payments. Joining both child tables to the order gives 3 x 2 = 6 rows, so the query counts 6 items and sums each payment three times: 360 paid instead of 120.
+
+Two tables that are both "many" to the same parent must not meet in one join before you aggregate. Bring each child down to one row per order in its own CTE, then join the results, which are all at order grain.
+
+`COUNT(DISTINCT i.sku)` repairs the item count and leaves the money wrong, which is worse: half the report now looks right.
+'''
+
+scale = '''
+Here, aggregating each child table first is what makes the answer correct, so speed is not the question.
+
+For a join that does not multiply rows, do not assume that aggregating first is faster. In the run below, on one machine, aggregating 100 million events per user before joining them to a 2-million-row user table was slower than joining first: the plan gains a hash aggregate with 2 million groups and saves nothing on the join. On a cluster the trade is different, because aggregating first cuts the rows that are shuffled across the network. Measure on the engine you are asked about.
+'''

@@ -1,0 +1,357 @@
+{
+ "date": "2026-11-26",
+ "rows": 100000000,
+ "days": 100,
+ "runs": 5,
+ "duckdb": "2.0.1",
+ "threads": 10,
+ "machine": {
+  "cpu": "Apple M5",
+  "cores": 10,
+  "memory_gb": 16,
+  "os": "Darwin 25.6.0"
+ },
+ "setup": {
+  "write_partitioned_seconds": 7.67,
+  "partitioned_mb": 2072.6,
+  "write_sorted_copy_seconds": 12.51,
+  "sorted_copy_mb": 2082.2,
+  "build_daily_summary_seconds": 0.13,
+  "daily_summary_rows": 5000
+ },
+ "experiments": [
+  {
+   "id": "prune",
+   "title": "Filter so the engine can skip data",
+   "question": "Count and sum the events of one day out of 100.",
+   "same_answer": true,
+   "answer_rows": 1,
+   "answer_first_row": [
+    "1000000",
+    "250419722"
+   ],
+   "variants": [
+    {
+     "name": "text formatting around the column",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE strftime(ts, '%Y-%m-%d') = '2026-02-19'",
+     "comparable": true,
+     "seconds": [
+      0.4485,
+      0.4057,
+      0.4104,
+      0.4281,
+      0.4167
+     ],
+     "median_seconds": 0.4167,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "PROJECTION",
+      "FILTER",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "date_trunc around the column",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE date_trunc('day', ts) = TIMESTAMP '2026-02-19'",
+     "comparable": true,
+     "seconds": [
+      0.0139,
+      0.0126,
+      0.0132,
+      0.0123,
+      0.0139
+     ],
+     "median_seconds": 0.0132,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "half-open range on the raw column",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE ts >= TIMESTAMP '2026-02-19' AND ts < TIMESTAMP '2026-02-20'",
+     "comparable": true,
+     "seconds": [
+      0.012,
+      0.0119,
+      0.0121,
+      0.0121,
+      0.0124
+     ],
+     "median_seconds": 0.0121,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "filter on the partition column",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE event_date = DATE '2026-02-19'",
+     "comparable": true,
+     "seconds": [
+      0.0029,
+      0.0025,
+      0.0025,
+      0.0025,
+      0.0025
+     ],
+     "median_seconds": 0.0025,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "dedupe",
+   "title": "Keep the latest version of each key",
+   "question": "Count the orders and sum their latest amounts (about 1.25 versions per order).",
+   "same_answer": true,
+   "answer_rows": 1,
+   "answer_first_row": [
+    "57084321",
+    "14300883610"
+   ],
+   "variants": [
+    {
+     "name": "ROW_NUMBER ... rn = 1 over all history",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT amount, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY ts DESC) AS rn FROM events) WHERE rn = 1",
+     "comparable": true,
+     "seconds": [
+      2.2768,
+      1.1023,
+      1.1309,
+      1.1701,
+      1.1003
+     ],
+     "median_seconds": 1.1309,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "arg_max ... GROUP BY over all history",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT arg_max(amount, ts) AS amount FROM events GROUP BY order_id)",
+     "comparable": true,
+     "seconds": [
+      1.0717,
+      1.0444,
+      0.9023,
+      0.9643,
+      1.393
+     ],
+     "median_seconds": 1.0444,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "ROW_NUMBER over the newest day only",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM (SELECT amount, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY ts DESC) AS rn FROM events WHERE event_date = DATE '2026-04-10') WHERE rn = 1",
+     "comparable": false,
+     "seconds": [
+      0.0119,
+      0.0114,
+      0.0112,
+      0.0115,
+      0.011
+     ],
+     "median_seconds": 0.0114,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "shrink",
+   "title": "Aggregate before a dimension join, or after",
+   "question": "Revenue per user segment: events joined to a 2,000,000-row user table.",
+   "same_answer": true,
+   "answer_rows": 20,
+   "answer_first_row": [
+    "0",
+    "1257351616"
+   ],
+   "variants": [
+    {
+     "name": "join, then aggregate",
+     "sql": "SELECT u.segment, SUM(e.amount) FROM events AS e JOIN users AS u USING (user_id) GROUP BY u.segment ORDER BY 1",
+     "comparable": true,
+     "seconds": [
+      0.5406,
+      0.4064,
+      0.4207,
+      0.4057,
+      0.491
+     ],
+     "median_seconds": 0.4207,
+     "operators": [
+      "PROJECTION",
+      "ORDER_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "PERFECT_HASH_GROUP_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_JOIN",
+      "READ_PARQUET",
+      "SEQ_SCAN"
+     ]
+    },
+    {
+     "name": "aggregate per user, then join",
+     "sql": "WITH per_user AS (SELECT user_id, SUM(amount) AS amount FROM events GROUP BY user_id) SELECT u.segment, SUM(p.amount) FROM per_user AS p JOIN users AS u USING (user_id) GROUP BY u.segment ORDER BY 1",
+     "comparable": true,
+     "seconds": [
+      1.2068,
+      0.586,
+      0.5405,
+      0.545,
+      0.5402
+     ],
+     "median_seconds": 0.545,
+     "operators": [
+      "PROJECTION",
+      "ORDER_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "PERFECT_HASH_GROUP_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_JOIN",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "READ_PARQUET",
+      "SEQ_SCAN"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "precompute",
+   "title": "Answer a dashboard from a summary table",
+   "question": "Revenue per day and city for the last 30 days.",
+   "same_answer": true,
+   "answer_rows": 1500,
+   "answer_first_row": [
+    "2026-03-12",
+    "0",
+    "5006914"
+   ],
+   "variants": [
+    {
+     "name": "from the raw events",
+     "sql": "SELECT event_date, city_id, SUM(amount) FROM events WHERE event_date >= DATE '2026-03-12' GROUP BY ALL ORDER BY ALL",
+     "comparable": true,
+     "seconds": [
+      0.0354,
+      0.0342,
+      0.0356,
+      0.034,
+      0.0347
+     ],
+     "median_seconds": 0.0347,
+     "operators": [
+      "ORDER_BY",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "from a daily summary table",
+     "sql": "SELECT event_date, city_id, SUM(revenue) FROM daily_city WHERE event_date >= DATE '2026-03-12' GROUP BY ALL ORDER BY ALL",
+     "comparable": true,
+     "seconds": [
+      0.002,
+      0.0012,
+      0.0012,
+      0.0011,
+      0.0011
+     ],
+     "median_seconds": 0.0012,
+     "operators": [
+      "PROJECTION",
+      "ORDER_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "HASH_GROUP_BY",
+      "PROJECTION",
+      "PROJECTION",
+      "SEQ_SCAN"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sorted",
+   "title": "Look up one key in sorted and unsorted files",
+   "question": "Count and sum the events of a single user.",
+   "same_answer": true,
+   "answer_rows": 1,
+   "answer_first_row": [
+    "59",
+    "13261"
+   ],
+   "variants": [
+    {
+     "name": "files ordered by time",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events WHERE user_id = 1234567",
+     "comparable": true,
+     "seconds": [
+      0.0335,
+      0.0346,
+      0.0339,
+      0.0342,
+      0.0364
+     ],
+     "median_seconds": 0.0342,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    },
+    {
+     "name": "a copy sorted by user_id",
+     "sql": "SELECT COUNT(*), SUM(amount) FROM events_by_user WHERE user_id = 1234567",
+     "comparable": true,
+     "seconds": [
+      0.0113,
+      0.0101,
+      0.0092,
+      0.0091,
+      0.0094
+     ],
+     "median_seconds": 0.0094,
+     "operators": [
+      "UNGROUPED_AGGREGATE",
+      "PROJECTION",
+      "READ_PARQUET"
+     ]
+    }
+   ]
+  }
+ ]
+}

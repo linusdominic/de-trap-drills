@@ -1,0 +1,86 @@
+title = "Slowest endpoints by p95 latency"
+family = "Messy input"
+pattern = "Log parsing"
+function = "slowest_endpoints"
+
+prompt = '''
+Each log line should look like `2026-03-01T10:00:00Z GET /loans/{id}?expand=docs 200 45ms`: time, method, path, status, duration.
+
+Return `{"top": [[endpoint, p95_ms], ...], "skipped": n}`.
+
+- An endpoint is the method and the path without its query string, such as `GET /loans/{id}`.
+- p95 is the value at position `ceil(0.95 * n)`, counting from 1, in the endpoint's sorted durations.
+- `top` holds the `k` endpoints with the highest p95, highest first; ties go to the endpoint that sorts first alphabetically.
+- Lines that do not match the format are counted in `skipped`, not parsed.
+'''
+
+starter = '''
+def slowest_endpoints(lines, k=2):
+    ...
+'''
+
+naive = '''
+import math
+
+
+def slowest_endpoints(lines, k=2):
+    durations = {}
+    for line in lines:
+        ts, method, path, status, ms = line.split()
+        durations.setdefault(f"{method} {path}", []).append(int(ms[:-2]))
+    p95 = {}
+    for endpoint, values in durations.items():
+        values.sort()
+        p95[endpoint] = values[math.ceil(0.95 * len(values)) - 1]
+    top = sorted(p95.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+    return {"top": [list(pair) for pair in top], "skipped": 0}
+'''
+
+reference = '''
+import re
+
+LINE = re.compile(r"^(\S+) ([A-Z]+) (/[^\s?]*)(\?\S*)? (\d{3}) (\d+)ms$")
+
+
+def slowest_endpoints(lines, k=2):
+    durations = {}
+    skipped = 0
+    for line in lines:
+        match = LINE.match(line.strip())
+        if match is None:
+            skipped += 1
+            continue
+        endpoint = f"{match[2]} {match[3]}"
+        durations.setdefault(endpoint, []).append(int(match[6]))
+    p95 = {}
+    for endpoint, values in durations.items():
+        values.sort()
+        rank = -(-95 * len(values) // 100)
+        p95[endpoint] = values[rank - 1]
+    top = sorted(p95.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+    return {"top": [list(pair) for pair in top], "skipped": skipped}
+'''
+
+trap = '''
+Logs contain lines that are not log lines: a stack trace, a truncated write, a blank line. `line.split()` into five names raises `ValueError` on the first one and the whole job dies at line 40 million.
+
+Match each line against the expected shape, skip what does not match, and count what you skipped. The count is part of the answer: a job that silently drops 30% of its input is worse than one that crashes.
+
+The second trap is the grouping key. `/loans/{id}?expand=docs` and `/loans/{id}?expand=notes` are one endpoint; left as they are, each query string becomes its own "endpoint" with too few samples to mean anything.
+'''
+
+scale = '''
+An exact percentile needs every value for the endpoint. Across billions of lines, use a mergeable sketch (t-digest, or `approx_percentile` in Spark and most warehouses) so that each partition is summarised separately and the summaries are combined. Say that you would trade exactness for that, and by roughly how much.
+'''
+
+[[cases]]
+name = "clean lines"
+args = '''[["2026-03-01T10:00:00Z GET /loans 200 40ms", "2026-03-01T10:00:01Z GET /loans 200 60ms", "2026-03-01T10:00:02Z POST /leads 201 20ms", "2026-03-01T10:00:03Z GET /health 200 2ms"]]'''
+
+[[cases]]
+name = "a stack trace and a blank line in the log"
+args = '''[["2026-03-01T10:00:00Z GET /loans 200 40ms", "Traceback (most recent call last):", "", "2026-03-01T10:00:02Z POST /leads 201 90ms", "2026-03-01T10:00:03Z GET /loans 500 timeout"]]'''
+
+[[cases]]
+name = "the same endpoint with different query strings"
+args = '''[["2026-03-01T10:00:00Z GET /loans/{id}?expand=docs 200 300ms", "2026-03-01T10:00:01Z GET /loans/{id}?expand=notes 200 100ms", "2026-03-01T10:00:02Z GET /loans/{id} 200 200ms", "2026-03-01T10:00:03Z POST /leads 201 250ms"], 1]'''

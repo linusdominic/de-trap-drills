@@ -1,0 +1,44 @@
+title = "Average order value from a daily summary"
+family = "Grain"
+pattern = "Re-aggregating a summary table"
+columns = ["city", "avg_order_value"]
+
+prompt = '''
+The raw orders are archived. All you have is `daily_city_orders`: one row per city and day, with the number of orders and that day's average order value.
+
+Return each city's average order value over the whole period.
+'''
+
+setup = '''
+CREATE TABLE daily_city_orders (day DATE, city VARCHAR, orders INTEGER, avg_order_value DOUBLE);
+INSERT INTO daily_city_orders VALUES
+  ('2026-03-01', 'Karachi', 100,  20.0),
+  ('2026-03-02', 'Karachi',   1, 200.0),
+  ('2026-03-01', 'Lahore',   10,  50.0),
+  ('2026-03-02', 'Lahore',   10,  70.0);
+'''
+
+naive = '''
+SELECT city, AVG(avg_order_value) AS avg_order_value
+FROM daily_city_orders
+GROUP BY city;
+'''
+
+reference = '''
+SELECT city,
+       SUM(orders * avg_order_value) / SUM(orders) AS avg_order_value
+FROM daily_city_orders
+GROUP BY city;
+'''
+
+trap = '''
+An average of averages gives every day the same weight, whatever its volume. Karachi had 100 orders averaging 20 and then a single order of 200. The naive query reports 110. The real average over the 101 orders is 2,200 / 101, about 21.78.
+
+Rebuild the numerator and the denominator and divide once at the end: `SUM(orders * avg_order_value) / SUM(orders)`.
+
+Lahore comes out the same either way, because its two days have equal volume. That is why this bug survives testing: it only shows when the weights differ.
+'''
+
+scale = '''
+This is the reason summary tables should store additive measures (order count, revenue sum) and leave ratios to query time. Sums can be re-aggregated to any level; averages, medians and distinct counts cannot.
+'''

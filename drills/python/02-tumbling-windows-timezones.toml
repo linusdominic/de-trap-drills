@@ -1,0 +1,72 @@
+title = "Events per tumbling window"
+family = "Time"
+pattern = "Windowed counts"
+function = "tumbling_counts"
+
+prompt = '''
+Count events per tumbling window. `timestamps` is a list of ISO 8601 strings; each carries its own UTC offset, because the events come from devices in several countries.
+
+Return a dict that maps each window's start, as a UTC ISO string such as `"2026-03-01T05:00:00+00:00"`, to the number of events in it. Windows are `minutes` long and aligned to the UTC clock.
+'''
+
+starter = '''
+def tumbling_counts(timestamps, minutes=15):
+    ...
+'''
+
+naive = '''
+from collections import Counter
+from datetime import datetime
+
+
+def tumbling_counts(timestamps, minutes=15):
+    counts = Counter()
+    for ts in timestamps:
+        t = datetime.fromisoformat(ts)
+        start = t.replace(minute=t.minute - t.minute % minutes, second=0, microsecond=0)
+        counts[start.isoformat()] += 1
+    return dict(counts)
+'''
+
+reference = '''
+from datetime import datetime, timezone
+
+
+def tumbling_counts(timestamps, minutes=15):
+    size = minutes * 60
+    counts = {}
+    for ts in timestamps:
+        seconds = int(datetime.fromisoformat(ts).timestamp())
+        start = datetime.fromtimestamp(seconds - seconds % size, tz=timezone.utc)
+        key = start.isoformat()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+'''
+
+trap = '''
+`10:07+05:00` and `05:07Z` are the same instant. The naive version buckets by the wall-clock digits in each string, so one moment is counted in two windows with two different labels.
+
+Convert every timestamp to one clock before bucketing. Working in epoch seconds makes the window arithmetic a single modulo.
+
+The naive version has two more bugs that the cases expose. With 60-minute windows and an offset of +05:30, local hour boundaries are not UTC hour boundaries, so events land in the wrong window, not just under the wrong label. And `t.minute % minutes` only works when the window divides an hour.
+'''
+
+scale = '''
+In a stream this is a tumbling event-time window. You also need a watermark that says how late an event may arrive before its window is closed, and a rule for events that arrive after that: drop them, or send them to a late-data output that a batch job corrects.
+'''
+
+[[cases]]
+name = "all in UTC"
+args = '''[["2026-03-01T10:07:00+00:00", "2026-03-01T10:14:59+00:00", "2026-03-01T10:15:00+00:00"]]'''
+
+[[cases]]
+name = "the same instant written with two offsets"
+args = '''[["2026-03-01T10:07:00+05:00", "2026-03-01T05:07:00Z"]]'''
+
+[[cases]]
+name = "hourly windows and a half-hour offset"
+args = '''[["2026-03-01T10:20:00+05:30", "2026-03-01T10:40:00+05:30", "2026-03-01T05:05:00+00:00"], 60]'''
+
+[[cases]]
+name = "90-minute windows"
+args = '''[["2026-03-01T01:40:00+00:00", "2026-03-01T02:50:00+00:00", "2026-03-01T03:10:00+00:00"], 90]'''

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trap Drills: data engineering drills where the obvious answer fails</title>
+  <meta name="description" content="SQL and Python drills for data engineers. Every dataset has a trap planted in it, and your answer is checked by running it in your browser.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e8590c'/%3E%3Cpath d='M8 10h16l-8 13z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css?v=20261126a">
+  <script>
+    try {
+      var saved = localStorage.getItem("trapdrills:theme");
+      if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <a class="brand" href="#/" aria-label="Trap Drills, home">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><path d="M8 10h16l-8 13z" fill="var(--on-accent)"/></svg>
+      <span>Trap Drills</span>
+    </a>
+    <nav class="top-nav" aria-label="Site">
+      <a href="#/" data-nav="home">Drills</a>
+      <a href="#/scale" data-nav="scale">Scale</a>
+      <a href="https://github.com/linusdominic/de-trap-drills" rel="noopener">GitHub</a>
+    </nav>
+    <div class="top-right">
+      <span class="progress" id="progress" aria-live="polite"></span>
+      <button class="icon-button" id="theme" type="button" aria-label="Switch between light and dark">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 16V5a7 7 0 0 1 0 14Z"/></svg>
+      </button>
+    </div>
+  </header>
+  <div class="shell">
+    <nav class="rail" id="rail" aria-label="All drills"></nav>
+    <main id="main" tabindex="-1"><p class="loading">Loading drills ...</p></main>
+  </div>
+  <script type="module" src="app.js?v=20261126a"></script>
+</body>
+</html>

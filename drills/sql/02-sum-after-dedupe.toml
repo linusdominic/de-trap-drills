@@ -1,0 +1,54 @@
+title = "Revenue per customer"
+family = "Duplicates"
+pattern = "Aggregate on the right grain"
+columns = ["customer_id", "revenue"]
+
+prompt = '''
+Finance wants total revenue per customer from `orders`.
+
+`orders` is loaded from an append-only change feed, like every table that comes from this source.
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER, updated_at TIMESTAMP);
+INSERT INTO orders VALUES
+  (1, 10, 100, '2026-03-01 09:00:00'),
+  (1, 10, 120, '2026-03-01 09:30:00'),
+  (2, 11,  50, '2026-03-01 10:00:00'),
+  (3, 12,  80, '2026-03-02 08:00:00'),
+  (3, 12,  80, '2026-03-02 08:00:00'),
+  (3, 12,  65, '2026-03-03 11:15:00'),
+  (4, 10,  20, '2026-03-04 12:00:00');
+'''
+
+naive = '''
+SELECT customer_id, SUM(amount) AS revenue
+FROM orders
+GROUP BY customer_id;
+'''
+
+reference = '''
+WITH current_orders AS (
+  SELECT order_id, customer_id, amount
+  FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) AS rn
+    FROM orders
+  ) AS versions
+  WHERE rn = 1
+)
+SELECT customer_id, SUM(amount) AS revenue
+FROM current_orders
+GROUP BY customer_id;
+'''
+
+trap = '''
+Nothing in the question says "deduplicate". The table does: it holds one row per *version* of an order, not one row per order. Summing it counts order 1 twice and order 3 three times, so customer 10 shows 240 instead of 140.
+
+Before any aggregate, ask what one row of the table is. If the grain is finer than the thing you are counting, reduce it to the right grain first, then aggregate.
+
+A quick check that finds this in seconds: `SELECT COUNT(*), COUNT(DISTINCT order_id) FROM orders`.
+'''
+
+scale = '''
+Put the deduplicated, one-row-per-order table in the warehouse as a model of its own and build every revenue metric on that. Deduplicating inside each report repeats the most expensive step and invites one report to forget it.
+'''

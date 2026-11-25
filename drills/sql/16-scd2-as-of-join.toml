@@ -1,0 +1,52 @@
+title = "The customer's city when they ordered"
+family = "History"
+pattern = "SCD Type 2 as-of join"
+columns = ["order_id", "order_date", "city"]
+
+prompt = '''
+`dim_customer` keeps history as a Type 2 slowly changing dimension: one row per version of a customer, valid from `valid_from` to `valid_to` inclusive.
+
+Return every order with the city the customer lived in on the day of the order.
+'''
+
+setup = '''
+CREATE TABLE dim_customer (customer_key INTEGER, customer_id INTEGER, city VARCHAR, valid_from DATE, valid_to DATE, is_current BOOLEAN);
+INSERT INTO dim_customer VALUES
+  (1, 100, 'Karachi',   '2025-01-01', '2026-02-14', FALSE),
+  (2, 100, 'Lahore',    '2026-02-15', '9999-12-31', TRUE),
+  (3, 101, 'Islamabad', '2025-06-01', '9999-12-31', TRUE);
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE);
+INSERT INTO orders VALUES
+  (1, 100, '2026-01-10'),
+  (2, 100, '2026-02-14'),
+  (3, 100, '2026-02-15'),
+  (4, 101, '2026-03-01');
+'''
+
+naive = '''
+SELECT o.order_id, o.order_date, d.city
+FROM orders AS o
+JOIN dim_customer AS d
+  ON d.customer_id = o.customer_id
+ AND d.is_current;
+'''
+
+reference = '''
+SELECT o.order_id, o.order_date, d.city
+FROM orders AS o
+JOIN dim_customer AS d
+  ON d.customer_id = o.customer_id
+ AND o.order_date BETWEEN d.valid_from AND d.valid_to;
+'''
+
+trap = '''
+Joining on `is_current` rewrites history: every past order is shown with today's city. Orders 1 and 2 were placed while the customer lived in Karachi, and the naive query moves them to Lahore. Revenue by city for January changes every time someone moves house.
+
+Join on the business key and the validity range, so each order picks the version that was true on its own date.
+
+Know which convention the dimension uses. Here both ends are inclusive, so `BETWEEN` is right and order 2, on the last day of the old version, stays in Karachi. Many dimensions use a half-open range instead (`valid_to` equals the next `valid_from`), and then `BETWEEN` matches two versions on the changeover day and duplicates the order.
+'''
+
+scale = '''
+A range join is expensive on large tables. The usual fix is to resolve the surrogate key once, when the fact row is loaded, and store `customer_key` on the fact. Every later query is then an equality join on that key.
+'''

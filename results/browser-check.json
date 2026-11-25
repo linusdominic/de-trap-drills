@@ -1,0 +1,222 @@
+{
+ "date": "2026-11-26",
+ "browser": "Google Chrome 158.0.8127.38",
+ "duckdb_wasm_package": "1.32.0",
+ "duckdb_in_browser": "v1.4.3",
+ "duckdb_here": "2.0.1",
+ "pyodide": "314.0.8",
+ "python_in_browser": "3.14.2",
+ "python_here": "3.12.16",
+ "drills_checked": 26,
+ "problems": 0,
+ "drills": [
+  {
+   "id": "dedupe-latest",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "sum-after-dedupe",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "top-n-ties",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "rolling-7d-missing-days",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "mom-growth-missing-month",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "sessionize-datediff",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "login-streaks-duplicates",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "consecutive-months-year-boundary",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "cohort-retention-where-filter",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "funnel-event-order",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "not-in-null",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "fanout-join-sum",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "avg-of-averages",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "local-day-boundary",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "between-timestamp-end",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "scd2-as-of-join",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "scd2-load-null-change",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "reconcile-null-and-missing",
+   "track": "sql",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "second-highest-ties",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "tumbling-windows-timezones",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "latest-by-key-late-arrival",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "flatten-json",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "slowest-endpoints-p95",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "merge-sorted-streams",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "reconcile-float-money",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  },
+  {
+   "id": "csv-quoted-commas",
+   "track": "python",
+   "reference_same": true,
+   "naive_same": true,
+   "reference_passes_in_browser": true,
+   "naive_fails_in_browser": true
+  }
+ ]
+}

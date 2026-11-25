@@ -1,0 +1,71 @@
+title = "Reconcile the warehouse with the source"
+family = "NULLs"
+pattern = "Reconciliation"
+columns = ["loan_id", "issue"]
+
+prompt = '''
+`src_loans` is the loan system and `wh_loans` is the warehouse copy. Return every loan that does not reconcile, with one of three issues:
+
+- `missing_in_warehouse`: in the source only
+- `missing_in_source`: in the warehouse only
+- `mismatch`: in both, but `amount` or `status` differs
+
+`amount` and `status` can be NULL in either system. NULL on both sides is a match.
+'''
+
+setup = '''
+CREATE TABLE src_loans (loan_id INTEGER, amount INTEGER, status VARCHAR);
+INSERT INTO src_loans VALUES
+  (1, 1000, 'funded'),
+  (2, 2500, 'funded'),
+  (3,  400, NULL),
+  (4,  900, 'closed'),
+  (5,  700, 'funded'),
+  (7, NULL, 'pending');
+CREATE TABLE wh_loans (loan_id INTEGER, amount INTEGER, status VARCHAR);
+INSERT INTO wh_loans VALUES
+  (1, 1000, 'funded'),
+  (2, 2400, 'funded'),
+  (3,  400, 'open'),
+  (5,  700, 'funded'),
+  (6,  100, 'funded'),
+  (7, NULL, 'pending');
+'''
+
+naive = '''
+SELECT s.loan_id, 'mismatch' AS issue
+FROM src_loans AS s
+JOIN wh_loans AS w ON w.loan_id = s.loan_id
+WHERE s.amount <> w.amount OR s.status <> w.status
+UNION ALL
+SELECT s.loan_id, 'missing_in_warehouse' AS issue
+FROM src_loans AS s
+LEFT JOIN wh_loans AS w ON w.loan_id = s.loan_id
+WHERE w.loan_id IS NULL;
+'''
+
+reference = '''
+SELECT COALESCE(s.loan_id, w.loan_id) AS loan_id,
+       CASE WHEN w.loan_id IS NULL THEN 'missing_in_warehouse'
+            WHEN s.loan_id IS NULL THEN 'missing_in_source'
+            ELSE 'mismatch' END AS issue
+FROM src_loans AS s
+FULL OUTER JOIN wh_loans AS w ON w.loan_id = s.loan_id
+WHERE s.loan_id IS NULL
+   OR w.loan_id IS NULL
+   OR s.amount IS DISTINCT FROM w.amount
+   OR s.status IS DISTINCT FROM w.status;
+'''
+
+trap = '''
+The naive query looks in one direction and compares with `<>`, and it misses two of the four problems.
+
+- Loan 3 has no status in the source and 'open' in the warehouse. `NULL <> 'open'` is unknown, so the row is not reported. Use `IS DISTINCT FROM`.
+- Loan 6 exists only in the warehouse. A left join from the source can never see it. Use a `FULL OUTER JOIN` so that both sides can be the one with the extra row.
+
+A reconciliation that reports "no differences" is only worth something if it would have caught a difference. Test it with a row planted on each side and a NULL planted in each compared column, as this dataset does.
+'''
+
+scale = '''
+Do not start with a full outer join of two very large tables. Compare cheap summaries first: row count and a checksum of the compared columns per partition (per day, or per bucket of the key). Only the partitions whose summaries differ need the row-by-row comparison.
+'''

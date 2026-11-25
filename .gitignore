@@ -1,0 +1,26 @@
+# Your own answers and your private coach profile never leave your machine
+answers/
+private/
+profile.md
+
+# Scale benchmark scratch data (make scale)
+.bench/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

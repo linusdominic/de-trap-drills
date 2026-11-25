@@ -1,0 +1,54 @@
+[project]
+name = "trapdrills"
+version = "0.1.0"
+description = "Data engineering drills where the obvious answer fails: SQL and Python exercises on datasets with the trap planted, checked by running your answer."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "Linus Dominic Nathaniel" }]
+dependencies = ["duckdb==2.0.1"]
+
+[project.scripts]
+drills = "trapdrills.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.5",
+    "mypy==2.4.1",
+    "pglast==8.9",
+]
+
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trapdrills"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["answers", "private", ".bench"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["trapdrills"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/trapdrills", "tools"]
+
+[[tool.mypy.overrides]]
+# pyrunner.py is the one file that also runs inside Pyodide, as plain source handed to
+# the browser. It handles arbitrary JSON and arbitrary user code, so it is left untyped.
+module = ["trapdrills.pyrunner"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

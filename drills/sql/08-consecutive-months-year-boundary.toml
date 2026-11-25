@@ -1,0 +1,61 @@
+title = "Customers active three months running"
+family = "Time"
+pattern = "Gaps and islands"
+columns = ["customer_id"]
+
+prompt = '''
+Return the customers who placed at least one order in each of three or more consecutive calendar months.
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, order_date DATE);
+INSERT INTO orders VALUES
+  (1, 1, '2025-11-10'), (2, 1, '2025-12-05'), (3, 1, '2026-01-20'),
+  (4, 2, '2026-01-03'), (5, 2, '2026-02-14'), (6, 2, '2026-02-20'), (7, 2, '2026-04-01'),
+  (8, 3, '2026-02-01'), (9, 3, '2026-03-15'), (10, 3, '2026-04-30'),
+  (11, 4, '2025-03-10'), (12, 4, '2026-04-10'), (13, 4, '2026-05-10');
+'''
+
+naive = '''
+WITH months AS (
+  SELECT DISTINCT customer_id, EXTRACT(month FROM order_date) AS m
+  FROM orders
+), numbered AS (
+  SELECT customer_id, m - ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY m) AS island
+  FROM months
+)
+SELECT customer_id
+FROM numbered
+GROUP BY customer_id, island
+HAVING COUNT(*) >= 3;
+'''
+
+reference = '''
+WITH months AS (
+  SELECT DISTINCT customer_id,
+         EXTRACT(year FROM order_date) * 12 + EXTRACT(month FROM order_date) AS m
+  FROM orders
+), numbered AS (
+  SELECT customer_id, m - ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY m) AS island
+  FROM months
+)
+SELECT DISTINCT customer_id
+FROM numbered
+GROUP BY customer_id, island
+HAVING COUNT(*) >= 3;
+'''
+
+trap = '''
+A month number on its own forgets the year, and that breaks the answer in both directions.
+
+- Customer 1 ordered in November, December and January. As month numbers that is 11, 12, 1, which is not a run, so a real streak is missed.
+- Customer 4 ordered in March 2025, then April and May 2026. As month numbers that is 3, 4, 5, so a streak is reported that never happened.
+
+Use a number that keeps climbing across years, such as `year * 12 + month`, or truncate the date to the month and count months between rows.
+
+The same mistake appears with week numbers (week 52 to week 1) and with day-of-year.
+'''
+
+scale = '''
+Reduce to one row per customer and month before the window function. That table is small and reusable; most retention and streak questions can start from it.
+'''

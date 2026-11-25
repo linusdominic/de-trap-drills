@@ -1,0 +1,92 @@
+title = "Load a Type 2 dimension"
+family = "History"
+pattern = "SCD Type 2 load"
+columns = ["customer_id", "city", "valid_from", "valid_to", "is_current"]
+check_query = "SELECT customer_id, city, valid_from, valid_to, is_current FROM dim_customer"
+
+prompt = '''
+Write the statements that apply today's staging table `stg_customer` to `dim_customer`. The batch date is in `batch.load_date`.
+
+- A customer whose city changed: close the current row (`valid_to` = the day before the batch date, `is_current` = FALSE) and insert a new current row from the batch date to 9999-12-31.
+- A new customer: insert a current row.
+- An unchanged customer: leave it alone.
+
+A city can be unknown (NULL) and become known later, or the other way round. Both are changes.
+
+The check reads `dim_customer` afterwards. Any unique `customer_key` is accepted.
+'''
+
+starter = '''
+-- Statement 1: close the current rows that changed
+-- UPDATE dim_customer ...
+
+-- Statement 2: insert new current rows for changed and new customers
+-- INSERT INTO dim_customer ...
+'''
+
+setup = '''
+CREATE TABLE batch (load_date DATE);
+INSERT INTO batch VALUES ('2026-03-10');
+CREATE TABLE dim_customer (customer_key INTEGER, customer_id INTEGER, city VARCHAR, valid_from DATE, valid_to DATE, is_current BOOLEAN);
+INSERT INTO dim_customer VALUES
+  (1, 100, 'Karachi',   '2025-01-01', '9999-12-31', TRUE),
+  (2, 101, 'Lahore',    '2025-01-01', '9999-12-31', TRUE),
+  (3, 102, NULL,        '2025-01-01', '9999-12-31', TRUE),
+  (4, 104, 'Islamabad', '2025-01-01', '9999-12-31', TRUE);
+CREATE TABLE stg_customer (customer_id INTEGER, city VARCHAR);
+INSERT INTO stg_customer VALUES
+  (100, 'Islamabad'),
+  (101, 'Lahore'),
+  (102, 'Karachi'),
+  (103, 'Karachi'),
+  (104, NULL);
+'''
+
+naive = '''
+UPDATE dim_customer AS d
+SET valid_to = b.load_date - 1, is_current = FALSE
+FROM stg_customer AS s, batch AS b
+WHERE d.customer_id = s.customer_id
+  AND d.is_current
+  AND d.city <> s.city;
+
+INSERT INTO dim_customer
+SELECT (SELECT MAX(customer_key) FROM dim_customer) + ROW_NUMBER() OVER (ORDER BY s.customer_id),
+       s.customer_id, s.city, b.load_date, DATE '9999-12-31', TRUE
+FROM stg_customer AS s
+CROSS JOIN batch AS b
+LEFT JOIN dim_customer AS d ON d.customer_id = s.customer_id AND d.is_current
+WHERE d.customer_id IS NULL;
+'''
+
+reference = '''
+UPDATE dim_customer AS d
+SET valid_to = b.load_date - 1, is_current = FALSE
+FROM stg_customer AS s, batch AS b
+WHERE d.customer_id = s.customer_id
+  AND d.is_current
+  AND d.city IS DISTINCT FROM s.city;
+
+INSERT INTO dim_customer
+SELECT (SELECT COALESCE(MAX(customer_key), 0) FROM dim_customer) + ROW_NUMBER() OVER (ORDER BY s.customer_id),
+       s.customer_id, s.city, b.load_date, DATE '9999-12-31', TRUE
+FROM stg_customer AS s
+CROSS JOIN batch AS b
+LEFT JOIN dim_customer AS d ON d.customer_id = s.customer_id AND d.is_current
+WHERE d.customer_id IS NULL;
+'''
+
+trap = '''
+`d.city <> s.city` is unknown, not true, when either side is NULL. Customer 102's city went from unknown to Karachi and customer 104's went from Islamabad to unknown; the naive load closes neither row, so the dimension silently keeps the old values.
+
+Compare with `IS DISTINCT FROM`, which treats NULL as a value: NULL and NULL are the same, NULL and 'Karachi' are different. With many tracked columns, compare one hash of all of them, built so that NULL and the empty string do not collide.
+
+Two more details in the reference:
+
+- `COALESCE(MAX(customer_key), 0)`: on the very first load the dimension is empty, `MAX` is NULL and every new key would be NULL.
+- The batch date comes from a table, not `CURRENT_DATE`, so a rerun or a backfill for an older date writes the same rows.
+'''
+
+scale = '''
+In a warehouse this is one `MERGE` (or a dbt snapshot) instead of two statements, so the close and the insert commit together. Detect changes with a stored hash of the tracked columns: comparing one column per row is far cheaper than comparing thirty.
+'''

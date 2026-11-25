@@ -1,0 +1,58 @@
+title = "Signup to purchase conversion"
+family = "Time"
+pattern = "Funnels"
+columns = ["signups", "converted"]
+
+prompt = '''
+Return one row: how many users signed up, and how many of those went on to purchase after signing up.
+
+Guests can purchase without an account, and some of them sign up later.
+'''
+
+setup = '''
+CREATE TABLE events (user_id INTEGER, event VARCHAR, ts TIMESTAMP);
+INSERT INTO events VALUES
+  (1, 'signup',   '2026-03-01 10:00:00'),
+  (1, 'purchase', '2026-03-02 09:00:00'),
+  (2, 'signup',   '2026-03-01 11:00:00'),
+  (3, 'purchase', '2026-02-20 15:00:00'),
+  (3, 'signup',   '2026-03-03 08:00:00'),
+  (4, 'signup',   '2026-03-04 09:00:00'),
+  (4, 'purchase', '2026-03-04 12:00:00'),
+  (4, 'purchase', '2026-03-06 17:00:00'),
+  (5, 'purchase', '2026-03-05 13:00:00');
+'''
+
+naive = '''
+SELECT COUNT(DISTINCT CASE WHEN event = 'signup' THEN user_id END) AS signups,
+       COUNT(DISTINCT CASE WHEN event = 'purchase' THEN user_id END) AS converted
+FROM events;
+'''
+
+reference = '''
+WITH signups AS (
+  SELECT user_id, MIN(ts) AS signed_up_at
+  FROM events
+  WHERE event = 'signup'
+  GROUP BY user_id
+)
+SELECT COUNT(DISTINCT s.user_id) AS signups,
+       COUNT(DISTINCT p.user_id) AS converted
+FROM signups AS s
+LEFT JOIN events AS p
+  ON p.user_id = s.user_id
+ AND p.event = 'purchase'
+ AND p.ts > s.signed_up_at;
+'''
+
+trap = '''
+A funnel is ordered: a step only counts if it happened after the step before it, for the same user. Counting each event type separately gives 4 purchasers against 4 signups, a 100% conversion rate. Two of those purchasers never went through the funnel: user 5 never signed up, and user 3 bought as a guest before signing up.
+
+Anchor on the first step (one row per user with the signup time), then join later steps with `ts > signed_up_at`.
+
+User 4 bought twice, which is why the count is of distinct users, not of joined rows.
+'''
+
+scale = '''
+Filter each step to its event type and date partition before joining; the self-join on a full events table is the expensive part. For funnels with many steps, one pass with conditional `MIN(ts)` per user and step, followed by comparisons between the step times, avoids repeated self-joins.
+'''

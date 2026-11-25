@@ -1,0 +1,50 @@
+title = "Orders per local day"
+family = "Time"
+pattern = "Time zones and day boundaries"
+columns = ["city", "local_day", "orders"]
+
+prompt = '''
+City managers want orders per day, where "day" is the calendar day in their own city.
+
+`ordered_at` is stored in UTC. `cities.utc_offset_hours` is the city's offset from UTC.
+'''
+
+setup = '''
+CREATE TABLE cities (city VARCHAR, utc_offset_hours INTEGER);
+INSERT INTO cities VALUES ('Karachi', 5), ('New York', -5), ('London', 0);
+CREATE TABLE orders (order_id INTEGER, city VARCHAR, ordered_at TIMESTAMP);
+INSERT INTO orders VALUES
+  (1, 'Karachi',  '2026-03-01 18:30:00'),
+  (2, 'Karachi',  '2026-03-01 19:30:00'),
+  (3, 'Karachi',  '2026-03-01 20:10:00'),
+  (4, 'New York', '2026-03-02 03:00:00'),
+  (5, 'New York', '2026-03-02 15:00:00'),
+  (6, 'London',   '2026-03-01 12:00:00');
+'''
+
+naive = '''
+SELECT city, CAST(ordered_at AS DATE) AS local_day, COUNT(*) AS orders
+FROM orders
+GROUP BY city, CAST(ordered_at AS DATE);
+'''
+
+reference = '''
+SELECT o.city,
+       CAST(o.ordered_at + c.utc_offset_hours * INTERVAL '1 hour' AS DATE) AS local_day,
+       COUNT(*) AS orders
+FROM orders AS o
+JOIN cities AS c ON c.city = o.city
+GROUP BY 1, 2;
+'''
+
+trap = '''
+Casting a UTC timestamp to a date gives the UTC day. An order placed in Karachi at 00:30 on 2 March was stored as 19:30 UTC on 1 March, so it lands on the wrong day; a late-evening order in New York moves the other way. London is unaffected, which is why this passes a test written in a UTC office.
+
+Shift to local time first, then take the date.
+
+This drill uses fixed offsets so that it runs anywhere. In production, store the IANA zone name and convert with `AT TIME ZONE 'Asia/Karachi'`: New York's offset is -4 for part of the year, and a fixed number is wrong on those days.
+'''
+
+scale = '''
+Store the local date as a column when the row is written, next to the UTC timestamp, and partition or cluster on it. A filter on a computed expression such as `CAST(ts + offset AS DATE)` cannot use partition pruning; a filter on a stored `local_date` column can.
+'''

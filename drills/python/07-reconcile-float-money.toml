@@ -1,0 +1,65 @@
+title = "Reconcile a ledger with a bank file"
+family = "Messy input"
+pattern = "Reconciliation"
+function = "reconcile"
+
+prompt = '''
+`ledger` and `bank` are lists of `{"id": ..., "amount": ...}`. Amounts are in dollars, as each system exported them. Ids are unique within each list.
+
+Return `{"missing_in_bank": [...], "extra_in_bank": [...], "mismatched": [...]}`, each a sorted list of ids. Two amounts match when they are the same to the cent.
+'''
+
+starter = '''
+def reconcile(ledger, bank):
+    ...
+'''
+
+naive = '''
+def reconcile(ledger, bank):
+    ours = {row["id"]: row["amount"] for row in ledger}
+    theirs = {row["id"]: row["amount"] for row in bank}
+    return {
+        "missing_in_bank": sorted(ours.keys() - theirs.keys()),
+        "extra_in_bank": sorted(theirs.keys() - ours.keys()),
+        "mismatched": sorted(i for i in ours.keys() & theirs.keys() if ours[i] != theirs[i]),
+    }
+'''
+
+reference = '''
+def cents(amount):
+    return round(amount * 100)
+
+
+def reconcile(ledger, bank):
+    ours = {row["id"]: cents(row["amount"]) for row in ledger}
+    theirs = {row["id"]: cents(row["amount"]) for row in bank}
+    return {
+        "missing_in_bank": sorted(ours.keys() - theirs.keys()),
+        "extra_in_bank": sorted(theirs.keys() - ours.keys()),
+        "mismatched": sorted(i for i in ours.keys() & theirs.keys() if ours[i] != theirs[i]),
+    }
+'''
+
+trap = '''
+The ledger computed a fee as `0.1 + 0.2` and exported `0.30000000000000004`. The bank sent `0.3`. They are the same thirty cents and `!=` says they differ, so the report fills with mismatches that nobody can see in either system.
+
+Never compare money as floats. Convert both sides to integer cents (or `Decimal`) and compare those.
+
+The structure is otherwise the standard reconciliation: build a dict by key for each side, then three set operations give missing, extra and common keys.
+'''
+
+scale = '''
+Store money as integer minor units or a fixed-precision decimal from the first table it lands in, so that every later join and sum is exact. For very large reconciliations, compare per-day counts and totals first and only match row by row on the days that disagree.
+'''
+
+[[cases]]
+name = "missing, extra and a real mismatch"
+args = '''[[{"id": "a", "amount": 10.0}, {"id": "b", "amount": 19.99}, {"id": "c", "amount": 5.0}], [{"id": "a", "amount": 10.0}, {"id": "b", "amount": 20.0}, {"id": "d", "amount": 7.5}]]'''
+
+[[cases]]
+name = "0.1 + 0.2 against 0.3"
+args = '''[[{"id": "fee", "amount": 0.30000000000000004}], [{"id": "fee", "amount": 0.3}]]'''
+
+[[cases]]
+name = "float noise far below a cent"
+args = '''[[{"id": "x", "amount": 1.15}, {"id": "y", "amount": 19.99}], [{"id": "x", "amount": 1.1500000000000001}, {"id": "y", "amount": 19.990000000000002}]]'''

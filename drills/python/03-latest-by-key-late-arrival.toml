@@ -1,0 +1,57 @@
+title = "Latest record per key from a stream"
+family = "Streams"
+pattern = "Dedupe / latest record"
+function = "latest_by_key"
+
+prompt = '''
+`records` is a stream of dicts with `id`, `updated_at` (an integer version time) and `status`. Return a list with the latest version of each id, sorted by id.
+
+The stream can only be read once, and records do not always arrive in order. If two versions of an id have the same `updated_at`, keep the one that arrived first.
+'''
+
+starter = '''
+def latest_by_key(records):
+    ...
+'''
+
+naive = '''
+def latest_by_key(records):
+    latest = {}
+    for record in records:
+        latest[record["id"]] = record
+    return sorted(latest.values(), key=lambda r: r["id"])
+'''
+
+reference = '''
+def latest_by_key(records):
+    latest = {}
+    for record in records:
+        seen = latest.get(record["id"])
+        if seen is None or record["updated_at"] > seen["updated_at"]:
+            latest[record["id"]] = record
+    return sorted(latest.values(), key=lambda r: r["id"])
+'''
+
+trap = '''
+"Last one seen wins" is only right if the stream is ordered. A retried or delayed message delivers an old version after a newer one, and the naive code overwrites the newer record with it.
+
+Compare versions, not arrival order: replace the stored record only when the incoming `updated_at` is greater.
+
+The tie rule matters too. With `>` the first arrival of a version is kept; with `>=` the last is. Either can be right, so ask, then make it deliberate.
+'''
+
+scale = '''
+Memory is one record per distinct key, not one per input row; say that when asked about a 100 GB file. If the keys themselves do not fit in memory, partition the input by a hash of the key and process one partition at a time, or sort by key and version and keep the last row of each group. In Spark this is a `row_number()` window or `max_by` per key.
+'''
+
+[[cases]]
+name = "versions arrive in order"
+args = '''[{"$stream": [{"id": 1, "updated_at": 1, "status": "new"}, {"id": 2, "updated_at": 1, "status": "new"}, {"id": 1, "updated_at": 2, "status": "paid"}]}]'''
+
+[[cases]]
+name = "an old version arrives late"
+args = '''[{"$stream": [{"id": 1, "updated_at": 1, "status": "new"}, {"id": 1, "updated_at": 3, "status": "shipped"}, {"id": 1, "updated_at": 2, "status": "paid"}]}]'''
+
+[[cases]]
+name = "two versions share a time"
+args = '''[{"$stream": [{"id": 7, "updated_at": 5, "status": "first"}, {"id": 7, "updated_at": 5, "status": "second"}]}]'''

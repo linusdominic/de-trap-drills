@@ -1,0 +1,65 @@
+title = "Seven-day repeat rate by cohort"
+family = "Missing rows"
+pattern = "Retention"
+columns = ["cohort", "users", "returned_7d"]
+
+prompt = '''
+A user's cohort is the date of their first order. For each cohort, return the number of users in it and how many of them ordered again on a later day, within 7 days of the first order.
+
+Every cohort must appear, including one where nobody came back.
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER, user_id INTEGER, order_date DATE);
+INSERT INTO orders VALUES
+  (1, 1, '2026-03-01'), (2, 1, '2026-03-03'), (3, 1, '2026-03-05'),
+  (4, 2, '2026-03-01'), (5, 2, '2026-03-20'),
+  (6, 3, '2026-03-02'),
+  (7, 4, '2026-03-02'), (8, 4, '2026-03-09'),
+  (9, 5, '2026-03-04'), (10, 5, '2026-03-04');
+'''
+
+naive = '''
+WITH firsts AS (
+  SELECT user_id, MIN(order_date) AS first_date
+  FROM orders
+  GROUP BY user_id
+)
+SELECT f.first_date AS cohort,
+       COUNT(DISTINCT f.user_id) AS users,
+       COUNT(DISTINCT o.user_id) AS returned_7d
+FROM firsts AS f
+LEFT JOIN orders AS o ON o.user_id = f.user_id
+WHERE o.order_date > f.first_date
+  AND o.order_date <= f.first_date + INTERVAL '7 days'
+GROUP BY f.first_date;
+'''
+
+reference = '''
+WITH firsts AS (
+  SELECT user_id, MIN(order_date) AS first_date
+  FROM orders
+  GROUP BY user_id
+)
+SELECT f.first_date AS cohort,
+       COUNT(DISTINCT f.user_id) AS users,
+       COUNT(DISTINCT o.user_id) AS returned_7d
+FROM firsts AS f
+LEFT JOIN orders AS o
+  ON o.user_id = f.user_id
+ AND o.order_date > f.first_date
+ AND o.order_date <= f.first_date + INTERVAL '7 days'
+GROUP BY f.first_date;
+'''
+
+trap = '''
+A condition on the right-hand table in `WHERE` turns a `LEFT JOIN` into an inner join. Users who never came back have `NULL` in `o.order_date`, the comparison is not true, and the row is removed. The denominator shrinks to the users who returned, so every cohort shows 100% retention, and the cohort of 4 March disappears.
+
+Put the condition in the `ON` clause, or keep the join open and count with `COUNT(DISTINCT CASE WHEN … THEN o.user_id END)`.
+
+Two smaller choices to say out loud: "again" means a later day here, so user 5's second order on the same day does not count; and the window is inclusive of day 7.
+'''
+
+scale = '''
+Compute each user's first order date once and store it on the user dimension. The retention query then joins orders to a small table on the user key, and the date conditions can use the partition column of the orders table.
+'''

@@ -1,0 +1,74 @@
+title = "Longest login streak"
+family = "Duplicates"
+pattern = "Gaps and islands"
+columns = ["user_id", "longest_streak"]
+
+prompt = '''
+For each user, return the length in days of their longest run of consecutive login days.
+
+`logins` has one row per login, and people log in more than once a day.
+'''
+
+setup = '''
+CREATE TABLE logins (user_id INTEGER, login_at TIMESTAMP);
+INSERT INTO logins VALUES
+  (1, '2026-03-01 08:00:00'),
+  (1, '2026-03-02 08:10:00'),
+  (1, '2026-03-02 21:40:00'),
+  (1, '2026-03-03 07:55:00'),
+  (1, '2026-03-07 09:00:00'),
+  (2, '2026-02-20 10:00:00'),
+  (2, '2026-03-03 10:00:00'),
+  (2, '2026-03-04 10:00:00'),
+  (2, '2026-03-04 18:30:00'),
+  (2, '2026-03-05 10:00:00'),
+  (2, '2026-03-06 10:00:00'),
+  (3, '2026-03-10 12:00:00');
+'''
+
+naive = '''
+WITH numbered AS (
+  SELECT user_id,
+         CAST(login_at AS DATE)
+           - CAST(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_at) AS INTEGER) AS island
+  FROM logins
+), streaks AS (
+  SELECT user_id, island, COUNT(*) AS days
+  FROM numbered
+  GROUP BY user_id, island
+)
+SELECT user_id, MAX(days) AS longest_streak
+FROM streaks
+GROUP BY user_id;
+'''
+
+reference = '''
+WITH days AS (
+  SELECT DISTINCT user_id, CAST(login_at AS DATE) AS login_date
+  FROM logins
+), numbered AS (
+  SELECT user_id,
+         login_date
+           - CAST(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_date) AS INTEGER) AS island
+  FROM days
+), streaks AS (
+  SELECT user_id, island, COUNT(*) AS days
+  FROM numbered
+  GROUP BY user_id, island
+)
+SELECT user_id, MAX(days) AS longest_streak
+FROM streaks
+GROUP BY user_id;
+'''
+
+trap = '''
+The gaps-and-islands trick is that `date - ROW_NUMBER()` stays constant while the dates climb by one day per row. A second login on the same day adds a row without moving the date, so the constant shifts and one streak is cut in two. User 1 logged in on 1, 2 and 3 March and gets a streak of 2.
+
+Reduce to one row per user and day first (`SELECT DISTINCT user_id, CAST(login_at AS DATE)`), then number the rows.
+
+It is the same lesson as the revenue drill: fix the grain before the clever part.
+'''
+
+scale = '''
+The `DISTINCT` to user-day is the big reduction: do it once, in a daily activity table that many metrics share. The streak logic then runs on at most one row per user per day.
+'''

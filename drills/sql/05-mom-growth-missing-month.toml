@@ -1,0 +1,65 @@
+title = "Month-over-month change by region"
+family = "Missing rows"
+pattern = "Period-over-period"
+columns = ["region", "month", "revenue", "prev_revenue", "change"]
+ordered = true
+
+prompt = '''
+For each region and each month in which it had sales, return the month's revenue, the revenue of the calendar month immediately before it (`prev_revenue`, 0 if the region sold nothing that month) and the difference (`change`).
+
+`month` is the first day of the month. Order by region, then month.
+'''
+
+setup = '''
+CREATE TABLE sales (region VARCHAR, sale_date DATE, amount INTEGER);
+INSERT INTO sales VALUES
+  ('North', '2026-01-12', 100),
+  ('North', '2026-02-03', 150),
+  ('North', '2026-04-21', 120),
+  ('South', '2026-01-05',  80),
+  ('South', '2026-02-10',  30),
+  ('South', '2026-02-24',  50),
+  ('South', '2026-03-15',  90),
+  ('South', '2026-04-02',  60);
+'''
+
+naive = '''
+WITH monthly AS (
+  SELECT region, CAST(date_trunc('month', sale_date) AS DATE) AS month, SUM(amount) AS revenue
+  FROM sales
+  GROUP BY 1, 2
+)
+SELECT region, month, revenue,
+       COALESCE(LAG(revenue) OVER (PARTITION BY region ORDER BY month), 0) AS prev_revenue,
+       revenue - COALESCE(LAG(revenue) OVER (PARTITION BY region ORDER BY month), 0) AS change
+FROM monthly
+ORDER BY region, month;
+'''
+
+reference = '''
+WITH monthly AS (
+  SELECT region, CAST(date_trunc('month', sale_date) AS DATE) AS month, SUM(amount) AS revenue
+  FROM sales
+  GROUP BY 1, 2
+)
+SELECT m.region, m.month, m.revenue,
+       COALESCE(p.revenue, 0) AS prev_revenue,
+       m.revenue - COALESCE(p.revenue, 0) AS change
+FROM monthly AS m
+LEFT JOIN monthly AS p
+  ON p.region = m.region
+ AND p.month = CAST(m.month - INTERVAL '1 month' AS DATE)
+ORDER BY m.region, m.month;
+'''
+
+trap = '''
+`LAG` returns the previous *row*, not the previous month. North sold nothing in March, so for April `LAG` hands back February's 150 and reports a drop of 30. The honest answer is a rise from 0 to 120.
+
+Either join each month to the month exactly one calendar month earlier, as the reference does, or build a spine of every region and month first and then `LAG` is safe.
+
+The same bug hides in year-over-year numbers: a `LAG(…, 12)` over months is only correct if no month is missing.
+'''
+
+scale = '''
+A spine of regions x months is tiny compared with the fact table, so build it from the dimension tables and join the aggregated facts to it. Aggregate to month first: the self-join then runs on one row per region and month.
+'''

@@ -1,0 +1,73 @@
+title = "Flatten nested JSON"
+family = "Messy input"
+pattern = "Recursive transforms"
+function = "flatten"
+
+prompt = '''
+Flatten a nested JSON object into one level, joining keys with dots.
+
+- A nested object contributes `parent.child` keys.
+- A list contributes its positions: `items.0.sku`, `items.1.sku`.
+- An empty object or empty list is kept as a value, so the key is not lost.
+'''
+
+starter = '''
+def flatten(obj):
+    ...
+'''
+
+naive = '''
+def flatten(obj, prefix=""):
+    out = {}
+    for key, value in obj.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            out.update(flatten(value, path))
+        else:
+            out[path] = value
+    return out
+'''
+
+reference = '''
+def flatten(obj, prefix=""):
+    out = {}
+    items = obj.items() if isinstance(obj, dict) else enumerate(obj)
+    for key, value in items:
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, (dict, list)) and value:
+            out.update(flatten(value, path))
+        else:
+            out[path] = value
+    return out
+'''
+
+trap = '''
+Real payloads are not only objects inside objects. The naive version has two gaps:
+
+- A list is stored whole, so `items` stays a nested value and the "flat" row still cannot be loaded into columns.
+- An empty object produces no keys at all, so the field vanishes. Downstream, a missing column and an empty value are different facts.
+
+Recurse into lists as well as dicts, and stop at empty containers.
+
+One question to raise yourself: a key that already contains a dot, such as `{"a.b": 1}` next to `{"a": {"b": 2}}`, collides after flattening. Decide whether to escape, reject or accept it.
+'''
+
+scale = '''
+Flattening lists by position gives a different set of columns for every list length. For a table, explode each list into its own child table with the parent key and the position; keep position-based flattening for small, fixed-size arrays.
+'''
+
+[[cases]]
+name = "objects inside objects"
+args = '''[{"id": 1, "borrower": {"name": "Asha", "address": {"city": "Karachi"}}}]'''
+
+[[cases]]
+name = "a list of objects"
+args = '''[{"id": 2, "items": [{"sku": "A"}, {"sku": "B"}]}]'''
+
+[[cases]]
+name = "empty containers and nulls"
+args = '''[{"id": 3, "meta": {}, "tags": [], "note": null}]'''
+
+[[cases]]
+name = "a list of scalars inside a list"
+args = '''[{"grid": [[1, 2], [3]]}]'''

@@ -1,0 +1,45 @@
+title = "Revenue for March"
+family = "Time"
+pattern = "Date range filters"
+columns = ["revenue"]
+experiment = "prune"
+
+prompt = '''
+Return one row: total revenue from payments made in March 2026.
+'''
+
+setup = '''
+CREATE TABLE payments (payment_id INTEGER, paid_at TIMESTAMP, amount INTEGER);
+INSERT INTO payments VALUES
+  (1, '2026-02-28 23:59:59',  10),
+  (2, '2026-03-01 00:00:00', 100),
+  (3, '2026-03-15 12:00:00',  50),
+  (4, '2026-03-31 00:00:00',  30),
+  (5, '2026-03-31 18:45:00',  70),
+  (6, '2026-04-01 00:00:00', 500);
+'''
+
+naive = '''
+SELECT SUM(amount) AS revenue
+FROM payments
+WHERE paid_at BETWEEN '2026-03-01' AND '2026-03-31';
+'''
+
+reference = '''
+SELECT SUM(amount) AS revenue
+FROM payments
+WHERE paid_at >= TIMESTAMP '2026-03-01'
+  AND paid_at <  TIMESTAMP '2026-04-01';
+'''
+
+trap = '''
+`'2026-03-31'` compared with a timestamp means midnight at the *start* of 31 March. `BETWEEN` stops there, so the payment at 18:45 that day is left out and March is short by 70. Stretching the range to `'2026-04-01'` is wrong the other way: `BETWEEN` is inclusive, so a payment at exactly midnight on 1 April is counted in March.
+
+Use a half-open range: `>=` the first instant of the period and `<` the first instant of the next. It is correct for dates, timestamps and any precision, and consecutive periods never overlap or leave a gap.
+'''
+
+scale = '''
+A half-open range on the raw column is also what lets the engine skip data: it can compare the bounds with partition values and file statistics, and read only the files and row groups that can match.
+
+Wrapping the column in a function can stop that. In the run below, a filter on `strftime(ts, '%Y-%m-%d')` reads every row and is many times slower than the range. DuckDB rewrote `date_trunc('day', ts) = ...` into a range by itself, so that form cost the same; not every engine, or every function, gets that treatment. Filtering on the partition column is faster again, because whole files are skipped without being opened.
+'''

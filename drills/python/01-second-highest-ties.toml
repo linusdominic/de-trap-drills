@@ -1,0 +1,61 @@
+title = "Second-highest salary per department"
+family = "Ties"
+pattern = "Group and rank"
+function = "second_highest"
+
+prompt = '''
+`salaries` is a list of `[department, amount]` pairs. Return a dict that maps each department to its second-highest salary *amount*, or `None` if the department has only one distinct amount.
+
+Several people can earn the same amount.
+'''
+
+starter = '''
+def second_highest(salaries):
+    ...
+'''
+
+naive = '''
+def second_highest(salaries):
+    by_dept = {}
+    for dept, amount in salaries:
+        by_dept.setdefault(dept, []).append(amount)
+    return {dept: sorted(amounts, reverse=True)[1] if len(amounts) > 1 else None
+            for dept, amounts in by_dept.items()}
+'''
+
+reference = '''
+def second_highest(salaries):
+    by_dept = {}
+    for dept, amount in salaries:
+        by_dept.setdefault(dept, set()).add(amount)
+    return {dept: sorted(amounts, reverse=True)[1] if len(amounts) > 1 else None
+            for dept, amounts in by_dept.items()}
+'''
+
+trap = '''
+Two people on the top salary are still one top amount. Sorting the raw list and taking index 1 returns the top salary again whenever it is shared.
+
+Collect the amounts in a set, so that each amount counts once, then take the second.
+
+It is the Python twin of `ROW_NUMBER` against `DENSE_RANK` in SQL. Ask the interviewer whether "second-highest" means the second person or the second amount.
+'''
+
+scale = '''
+You do not need to keep every amount. Tracking the two largest distinct amounts per department is constant memory per key and one pass over the input, which matters when the input is a file that does not fit in memory.
+'''
+
+[[cases]]
+name = "no ties"
+args = '''[[["data", 300], ["data", 200], ["data", 100], ["ops", 90], ["ops", 80]]]'''
+
+[[cases]]
+name = "two people share the top salary"
+args = '''[[["data", 300], ["data", 300], ["data", 200]]]'''
+
+[[cases]]
+name = "everyone earns the same"
+args = '''[[["ops", 90], ["ops", 90]]]'''
+
+[[cases]]
+name = "a department of one"
+args = '''[[["solo", 50]]]'''

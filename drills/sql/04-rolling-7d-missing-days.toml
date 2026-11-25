@@ -1,0 +1,61 @@
+title = "Seven-day rolling revenue"
+family = "Missing rows"
+pattern = "Rolling metrics"
+columns = ["day", "revenue", "revenue_7d"]
+ordered = true
+experiment = "precompute"
+
+prompt = '''
+Build the series behind a dashboard chart: for every day from 2026-03-01 to 2026-03-14, the revenue of that day and the revenue of the seven days ending on it (that day and the six calendar days before it).
+
+A day with no orders has revenue 0 and still appears. Order by day.
+'''
+
+setup = '''
+CREATE TABLE orders (order_id INTEGER, order_date DATE, amount INTEGER);
+INSERT INTO orders VALUES
+  (1, '2026-03-01', 100),
+  (2, '2026-03-02',  50),
+  (3, '2026-03-03',  70),
+  (4, '2026-03-09',  40),
+  (5, '2026-03-10',  60),
+  (6, '2026-03-14',  30);
+'''
+
+naive = '''
+SELECT order_date AS day,
+       SUM(amount) AS revenue,
+       SUM(SUM(amount)) OVER (ORDER BY order_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS revenue_7d
+FROM orders
+GROUP BY order_date
+ORDER BY day;
+'''
+
+reference = '''
+WITH days AS (
+  SELECT CAST(d AS DATE) AS day
+  FROM generate_series(TIMESTAMP '2026-03-01', TIMESTAMP '2026-03-14', INTERVAL '1 day') AS g(d)
+), daily AS (
+  SELECT order_date AS day, SUM(amount) AS revenue
+  FROM orders
+  GROUP BY order_date
+)
+SELECT days.day,
+       COALESCE(daily.revenue, 0) AS revenue,
+       SUM(COALESCE(daily.revenue, 0)) OVER (ORDER BY days.day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS revenue_7d
+FROM days
+LEFT JOIN daily ON daily.day = days.day
+ORDER BY days.day;
+'''
+
+trap = '''
+`ROWS BETWEEN 6 PRECEDING AND CURRENT ROW` counts *rows*, not days. With no row for 4 to 8 March, the window on 14 March reaches back six rows to 1 March and reports 350 for a "seven-day" total that should be 130. The quiet days are also missing from the chart.
+
+Build a date spine (one row per calendar day), left join the facts to it and turn the gaps into zeros. Then seven rows really are seven days.
+
+`RANGE BETWEEN INTERVAL '6 days' PRECEDING AND CURRENT ROW` fixes the totals without a spine, but the missing days still do not appear.
+'''
+
+scale = '''
+Keep a calendar table in the warehouse instead of generating the spine in each query. Compute the rolling window over a daily summary table, not over raw orders: 14 rows per series instead of every order in the range.
+'''
