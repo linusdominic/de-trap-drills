@@ -124,12 +124,13 @@ The queries, all five timings per query and each plan's operators are in [result
 
 ## What was verified
 
-All on macOS, on 26 November 2026.
+On macOS, on 26 November 2026, unless stated.
 
 - `uv run drills verify`: for all 26 drills, the reference answer passes and the naive answer fails.
 - All 18 SQL reference answers parse with PostgreSQL's parser (pglast 8.9).
 - The site was opened in Chrome at desktop width and at 375 px, in light and dark: a failed check, a passed check and the scale page were exercised by hand.
-- `make check`: ruff, mypy in strict mode and 134 tests pass.
+- `make check`: ruff, mypy in strict mode and 134 tests pass. The same checks passed in GitHub Actions on Ubuntu 24.04.
+- The live site: all 26 drills were run on https://linusdominic.github.io/de-trap-drills/ in headless Chrome 158. Every reference answer passed and every naive answer failed.
 
 The browser against the command line (`make browser-check`):
 
@@ -139,7 +140,6 @@ On 2026-11-26, 26 of 26 drills gave the same result rows, the same case outputs 
 
 ## What was not verified
 
-- **Deployment.** The site has only been served from a local web server. It has not been checked on GitHub Pages.
 - **Other browsers.** Only Chrome 158 was used. Firefox, Safari and real phones are untested, and nobody has tried typing a query on a phone keyboard.
 - **The CDN.** The site needs jsDelivr for DuckDB-Wasm (a 34 MB file, about 5 MB compressed in transit) and Pyodide (about 6 MB in transit). Offline, or where that host is blocked, the drills do not run in the browser. Load time on a slow connection was not measured.
 - **Engine versions.** The browser runs DuckDB 1.4.3 and the command line runs 2.0.1. They agree on the 52 answers that ship with the drills; a query you write can still behave differently in the two.
@@ -149,7 +149,6 @@ On 2026-11-26, 26 of 26 drills gave the same result rows, the same case outputs 
 - **The field guide.** It is prose and is not tested. Statements about specific engines were not checked against their current documentation.
 - **Coach mode.** The instructions have not been through a full mock session.
 - **Windows.** Not tried.
-- **CI.** The workflow has not run yet, because the repository has not been pushed.
 
 ## Development
 
