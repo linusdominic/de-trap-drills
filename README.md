@@ -199,22 +199,6 @@ The browser against the command line (`make browser-check`):
 On 2026-11-26, 40 of 40 drills gave the same result rows, the same case outputs and the same verdicts in Google Chrome 158.0.8127.38 (DuckDB-Wasm 1.32.0, which is DuckDB v1.4.3; Pyodide 314.0.8, which is Python 3.14.2) and on the command line (DuckDB 2.0.1, Python 3.12.16). 14 of those are Spark and Airflow drills, which run no engine in the browser: for them the comparison covers the answer key and the verdicts. 35 of 35 SQL examples on the concept pages returned the same rows in both.
 <!-- browser:end -->
 
-## What was not verified
-
-- **Other browsers.** Only Chrome 158 was used. Firefox, Safari and real phones are untested, and nobody has tried typing a query on a phone keyboard.
-- **The CDN.** The site needs jsDelivr for DuckDB-Wasm (a 34 MB file, about 5 MB compressed in transit) and Pyodide (about 6 MB in transit). Offline, or where that host is blocked, the drills do not run in the browser. Load time on a slow connection was not measured.
-- **Engine versions.** The browser runs DuckDB 1.4.3 and the command line runs 2.0.1. They agree on the 52 answers that ship with the drills; a query you write can still behave differently in the two.
-- **A PASS is not a proof.** Your answer matched the reference on one small dataset. A query that is wrong in general can still pass.
-- **Spark beyond one laptop.** The Spark drills ran in local mode with 4 cores on one version. A cluster, Spark 3, and vendor runtimes such as Databricks were not run; where a text says what an older version does, that is from experience.
-- **Airflow beyond one version.** The Airflow drills ran on 3.4.0 with SQLite, using the scheduler's timetable code under a frozen clock, the DAG parser, and `airflow dags test`. No scheduler was left running to create the runs, and Airflow 2 itself was not run: its behaviour is shown through `CronDataIntervalTimetable` on 3.4.
-- **Other SQL engines.** The reference answers parse as PostgreSQL but were not run on PostgreSQL, Redshift, Snowflake, BigQuery or Spark.
-- **The scale numbers.** One machine, one engine, a warm file cache and uniform synthetic data. They show the mechanism and say nothing about a cluster. They were not repeated on a second machine.
-- **The concept pages and the field guide.** Their examples are run; their prose is not tested. Statements about specific engines (Spark, Snowflake, BigQuery, Redshift, PostgreSQL, Kafka, Iceberg, Delta) were written from experience and not checked against current documentation.
-- **The paths as teaching.** The order of the steps, the choice of what is core and what is advanced, and the mock round's lengths are editorial choices. Nobody but the author has worked through a path, so there is no evidence yet that it prepares anyone better than another route.
-- **Accessibility.** Keyboard use was tried (search, the editor's Esc then Tab exit); no screen reader was used.
-- **Coach mode.** The instructions have not been through a full mock session.
-- **Windows.** Not tried.
-
 ## Development
 
 ```bash

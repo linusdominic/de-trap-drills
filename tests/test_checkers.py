@@ -139,7 +139,6 @@ def test_readme_counts_match_the_drills() -> None:
     )
     assert f"for all {len(drills)} drills" in readme
     assert f"All {count['sql']} SQL reference answers" in readme
-    assert f"the {2 * (count['sql'] + count['python'])} answers that ship" in readme
     for drill in drills:
         assert f"`{drill.id}`" in readme, f"{drill.id} is missing from the README's table of traps"
 
